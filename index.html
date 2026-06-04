@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="pt-BR" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Garage Sale — Golfleet</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- ══════════════════════════════════════
+     HEADER — fixo no topo em todas as telas
+══════════════════════════════════════ -->
+<header>
+
+  <!-- Esquerda: logo + divisor + título (apenas mobile) -->
+  <div class="header-left">
+    <img
+      src="https://golfleet.com.br/wp-content/uploads/2024/10/logo-golfleet-white.svg"
+      alt="Golfleet"
+      class="header-logo"
+      onerror="this.style.display='none'">
+    <div class="header-divider"></div>
+    <span class="header-title-mobile">Garage <span>Sale</span></span>
+  </div>
+
+  <!-- Centro: título principal (apenas desktop) -->
+  <div class="header-center">
+    <span class="header-center-title">Garage <span>Sale</span> · Golfleet</span>
+  </div>
+
+  <!-- Direita: contador, tema e admin -->
+  <div class="header-right">
+    <span class="badge-header" id="header-status"></span>
+    <button
+      class="theme-btn"
+      onclick="toggleTheme()"
+      title="Alternar modo claro/escuro"
+      aria-label="Alternar tema">
+      <span class="theme-icon theme-icon-moon">🌙</span>
+      <span class="theme-icon theme-icon-sun">☀️</span>
+    </button>
+    <span class="admin-link" onclick="showAdmin()">Admin</span>
+  </div>
+
+</header>
+
+
+<!-- ══════════════════════════════════════
+     TELA 1 — Termos e Condições
+══════════════════════════════════════ -->
+<div id="page-terms" class="page active">
+  <div class="terms-wrap">
+    <p class="terms-eyebrow">Venda interna de equipamentos</p>
+    <h1 class="terms-title">Termos e<br>Condições</h1>
+
+    <div class="terms-section">
+      <h3>Forma de Pagamento</h3>
+      <p>Desconto em folha do equipamento somado dos valores acessórios (frete, etc), com parcela mensal mínima de
+        <strong>R$100,00</strong> e parcelamento máximo em <strong>10 vezes</strong>. O desconto ocorrerá a partir da
+        primeira folha de pagamento após a compra. O colaborador expressamente concorda e anui com referido desconto em
+        sua folha de pagamento e/ou rescisão.</p>
+    </div>
+
+    <div class="terms-section">
+      <h3>Garantia</h3>
+      <p>O comprador declara estar ciente de que os equipamentos são usados, podem possuir avarias e concorda que a
+        compra se dá no estado em que se encontram. As avarias encontram-se discriminadas no catálogo. No ato da compra
+        os equipamentos devem ser vistoriados e testados. Portanto, fica o comprador ciente de que não haverá garantia
+        e/ou possibilidade de devolução.</p>
+      <div class="terms-divider"></div>
+      <p>Compradores que residem fora de Londrina poderão eleger uma pessoa (colaborador Golfleet) de sua confiança para
+        vistoriar e testar o produto em seu lugar, conforme expressamente indicado e autorizado no e-mail:
+        <strong>garagesale@golfleet.com.br</strong>. O comprador, após vistoria e teste e envio do produto, exime,
+        portanto, a empresa de qualquer responsabilidade sobre o(s) bem(ns) adquirido(s).</p>
+    </div>
+
+    <div class="terms-section">
+      <h3>Envio</h3>
+      <p>Para compradores que terão o envio via transportadora, o termo de compra será assinado antes do envio do(s)
+        produto(s), mediante assinatura eletrônica deste termo na plataforma <strong>Docusign</strong>.</p>
+      <div class="terms-divider"></div>
+      <p>Para compradores que residem fora de Londrina, o setor de Help Desk irá fotografar todos os produtos antes do
+        seu envio. Caso seja identificado qualquer avaria que não esteja mencionada ou fotografada, o comprador deverá
+        nos informar para que possamos analisar junto a transportadora. O aceite no documento da transportadora valerá
+        como comprovante da entrega do equipamento para todos os fins de direito, isentando a Golfleet de outras
+        responsabilidades quanto ao transporte.</p>
+    </div>
+
+    <div class="accept-box">
+      <p>Ao prosseguir, você declara ter lido e compreendido todos os termos acima e concorda expressamente com as
+        condições de pagamento, garantia e envio descritas.</p>
+      <div class="checkbox-row">
+        <input
+          type="checkbox"
+          id="accept-terms"
+          onchange="document.getElementById('btn-accept').disabled = !this.checked">
+        <label for="accept-terms">
+          Li e aceito os termos e condições, e concordo com o desconto em folha de pagamento conforme descrito acima.
+        </label>
+      </div>
+      <button class="btn-primary" id="btn-accept" disabled onclick="goToCatalog()">
+        Acessar o catálogo
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <path d="M5 12h14M12 5l7 7-7 7"/>
+        </svg>
+      </button>
+    </div>
+  </div>
+</div>
+
+
+<!-- ══════════════════════════════════════
+     TELA 2 — Catálogo de produtos
+══════════════════════════════════════ -->
+<div id="page-catalog" class="page">
+
+  <div class="catalog-header">
+    <h2>Equipamentos disponíveis</h2>
+    <p>Selecione uma categoria e clique no produto para comprar</p>
+  </div>
+
+  <!-- Filtro desktop (chips) -->
+  <div class="filter-bar-wrap">
+    <div class="filter-bar" id="filter-bar"></div>
+  </div>
+
+  <!-- Filtro mobile (hamburger) -->
+  <button class="filter-mobile-btn" id="filter-mobile-btn" onclick="toggleMobileFilter()">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <line x1="3" y1="6" x2="21" y2="6"/>
+      <line x1="3" y1="12" x2="21" y2="12"/>
+      <line x1="3" y1="18" x2="21" y2="18"/>
+    </svg>
+    <span id="filter-mobile-label">Todos</span>
+    <svg class="arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="m6 9 6 6 6-6"/>
+    </svg>
+  </button>
+  <div class="filter-mobile-dropdown" id="filter-mobile-dropdown"></div>
+
+  <!-- Grid de produtos (renderizado por JS) -->
+  <div class="products-area" id="products-area"></div>
+
+</div>
+
+
+<!-- ══════════════════════════════════════
+     MODAL — Detalhes e compra do produto
+══════════════════════════════════════ -->
+<div class="modal-backdrop" id="modal-backdrop">
+  <div class="modal" id="modal-content"></div>
+</div>
+
+
+<!-- ══════════════════════════════════════
+     TELA 3 — Painel administrativo
+══════════════════════════════════════ -->
+<div id="page-admin" class="page">
+
+  <!-- Login -->
+  <div id="admin-auth">
+    <div class="admin-password-wrap">
+      <h2>Área administrativa</h2>
+      <p>Entre com seu usuário e senha</p>
+      <input
+        type="text"
+        id="admin-login-input"
+        placeholder="Usuário"
+        autocomplete="username"
+        onkeydown="if(event.key==='Enter') document.getElementById('admin-pw').focus()">
+      <input
+        type="password"
+        id="admin-pw"
+        placeholder="Senha"
+        autocomplete="current-password"
+        onkeydown="if(event.key==='Enter') checkAdmin()">
+      <button class="btn-primary" onclick="checkAdmin()">Entrar</button>
+      <p id="pw-error" style="color:var(--danger);font-size:13px;margin-top:0.75rem;display:none;">
+        Usuário ou senha incorretos.
+      </p>
+      <button
+        onclick="showPage('page-terms')"
+        style="margin-top:1rem;background:transparent;border:1px solid var(--border);color:var(--muted);
+               font-family:'Syne',sans-serif;font-weight:600;font-size:13px;letter-spacing:0.06em;
+               text-transform:uppercase;padding:0.75rem 1.5rem;border-radius:8px;cursor:pointer;
+               width:100%;transition:all 0.2s;"
+        onmouseover="this.style.borderColor='var(--purple-dark)';this.style.color='var(--purple-light)'"
+        onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--muted)'">
+        ← Voltar ao site de compras
+      </button>
+    </div>
+  </div>
+
+  <!-- Painel (visível após login) -->
+  <div id="admin-panel" class="admin-panel" style="display:none;">
+
+    <!-- Cabeçalho do painel -->
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:1rem;margin-bottom:0.5rem;">
+      <div>
+        <h2 style="font-size:1.8rem;font-weight:800;color:var(--white);">Painel Admin</h2>
+        <p id="admin-user-badge" style="font-size:12px;color:var(--purple-light);margin-top:4px;"></p>
+      </div>
+      <div style="display:flex;gap:0.5rem;flex-wrap:wrap;">
+        <button class="export-btn" onclick="exportCSV()">Exportar CSV</button>
+        <button class="export-btn" onclick="showPage('page-terms')">← Voltar ao site</button>
+        <button class="btn-danger" onclick="if(confirm('Apagar TODOS os pedidos?')) clearOrders()">
+          Limpar pedidos
+        </button>
+      </div>
+    </div>
+    <p>Gerencie produtos, categorias, pedidos e usuários.</p>
+
+    <!-- Abas -->
+    <div class="admin-tabs">
+      <button class="tab-btn active"  onclick="switchTab('orders')">Pedidos</button>
+      <button class="tab-btn"         onclick="switchTab('products')">Produtos</button>
+      <button class="tab-btn"         onclick="switchTab('categories')">Categorias</button>
+      <button class="tab-btn"         onclick="switchTab('users')">Usuários</button>
+    </div>
+
+    <!-- Aba: Pedidos -->
+    <div id="tab-orders" class="tab-content active">
+      <div id="orders-list"></div>
+    </div>
+
+    <!-- Aba: Produtos -->
+    <div id="tab-products" class="tab-content">
+      <div id="products-edit-list"></div>
+      <button class="add-product-btn" onclick="addNewProduct()">+ Adicionar produto</button>
+    </div>
+
+    <!-- Aba: Categorias -->
+    <div id="tab-categories" class="tab-content">
+      <div id="categories-list"></div>
+      <div class="product-edit-card" style="margin-top:1rem;">
+        <p style="font-family:'Syne',sans-serif;font-weight:700;font-size:1rem;color:var(--white);margin-bottom:1rem;">
+          Nova categoria
+        </p>
+        <label>Nome da categoria</label>
+        <input type="text" id="new-cat-name" placeholder="Ex: Impressoras">
+        <button class="btn-save" style="margin-top:1rem;" onclick="saveNewCategory()">
+          Adicionar categoria
+        </button>
+      </div>
+    </div>
+
+    <!-- Aba: Usuários -->
+    <div id="tab-users" class="tab-content">
+      <div id="users-list"></div>
+      <button class="add-product-btn" onclick="showAddUserForm()" style="margin-top:0.5rem">
+        + Adicionar administrador
+      </button>
+      <div id="add-user-form" style="display:none;margin-top:1rem;" class="product-edit-card">
+        <p style="font-family:'Syne',sans-serif;font-weight:700;font-size:1rem;color:var(--white);margin-bottom:1rem;">
+          Novo administrador
+        </p>
+        <label>Nome completo</label>
+        <input type="text" id="new-user-name" placeholder="Ex: Maria Silva">
+        <label>Usuário (login)</label>
+        <input type="text" id="new-user-login" placeholder="Ex: maria" autocomplete="off">
+        <label>Senha</label>
+        <input type="password" id="new-user-pw" placeholder="Mínimo 6 caracteres" autocomplete="new-password">
+        <label>Nível de acesso</label>
+        <select id="new-user-role">
+          <option value="admin">Administrador completo</option>
+          <option value="viewer">Somente visualização (pedidos)</option>
+        </select>
+        <div style="display:flex;gap:0.5rem;margin-top:1rem;flex-wrap:wrap;">
+          <button class="btn-save" onclick="saveNewUser()">Criar usuário</button>
+          <button class="btn-danger"
+                  onclick="document.getElementById('add-user-form').style.display='none'">
+            Cancelar
+          </button>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /admin-panel -->
+</div><!-- /page-admin -->
+
+
+<script src="script.js"></script>
+</body>
+</html>
