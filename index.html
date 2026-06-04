@@ -166,9 +166,9 @@
       <h2>Área administrativa</h2>
       <p>Entre com seu usuário e senha</p>
       <input
-        type="text"
+        type="email"
         id="admin-login-input"
-        placeholder="Usuário"
+        placeholder="E-mail"
         autocomplete="username"
         onkeydown="if(event.key==='Enter') document.getElementById('admin-pw').focus()">
       <input
@@ -206,6 +206,7 @@
       <div style="display:flex;gap:0.5rem;flex-wrap:wrap;">
         <button class="export-btn" onclick="exportCSV()">Exportar CSV</button>
         <button class="export-btn" onclick="showPage('page-terms')">← Voltar ao site</button>
+        <button class="export-btn" onclick="adminLogout()">Sair</button>
         <button class="btn-danger" onclick="if(confirm('Apagar TODOS os pedidos?')) clearOrders()">
           Limpar pedidos
         </button>
@@ -218,7 +219,6 @@
       <button class="tab-btn active"  onclick="switchTab('orders')">Pedidos</button>
       <button class="tab-btn"         onclick="switchTab('products')">Produtos</button>
       <button class="tab-btn"         onclick="switchTab('categories')">Categorias</button>
-      <button class="tab-btn"         onclick="switchTab('users')">Usuários</button>
     </div>
 
     <!-- Aba: Pedidos -->
@@ -247,41 +247,12 @@
       </div>
     </div>
 
-    <!-- Aba: Usuários -->
-    <div id="tab-users" class="tab-content">
-      <div id="users-list"></div>
-      <button class="add-product-btn" onclick="showAddUserForm()" style="margin-top:0.5rem">
-        + Adicionar administrador
-      </button>
-      <div id="add-user-form" style="display:none;margin-top:1rem;" class="product-edit-card">
-        <p style="font-family:'Syne',sans-serif;font-weight:700;font-size:1rem;color:var(--white);margin-bottom:1rem;">
-          Novo administrador
-        </p>
-        <label>Nome completo</label>
-        <input type="text" id="new-user-name" placeholder="Ex: Maria Silva">
-        <label>Usuário (login)</label>
-        <input type="text" id="new-user-login" placeholder="Ex: maria" autocomplete="off">
-        <label>Senha</label>
-        <input type="password" id="new-user-pw" placeholder="Mínimo 6 caracteres" autocomplete="new-password">
-        <label>Nível de acesso</label>
-        <select id="new-user-role">
-          <option value="admin">Administrador completo</option>
-          <option value="viewer">Somente visualização (pedidos)</option>
-        </select>
-        <div style="display:flex;gap:0.5rem;margin-top:1rem;flex-wrap:wrap;">
-          <button class="btn-save" onclick="saveNewUser()">Criar usuário</button>
-          <button class="btn-danger"
-                  onclick="document.getElementById('add-user-form').style.display='none'">
-            Cancelar
-          </button>
-        </div>
-      </div>
-    </div>
+
 
   </div><!-- /admin-panel -->
 </div><!-- /page-admin -->
 
 
-<script src="script.js"></script>
+<script type="module" src="script.js"></script>
 </body>
 </html>
