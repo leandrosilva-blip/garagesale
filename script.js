@@ -253,20 +253,44 @@ function imgSVG() {
 /* ══════════════════════════════════════
    MODAL DE COMPRA
 ══════════════════════════════════════ */
+// Índice da imagem atual no carrossel
+let galleryIndex = 0;
+
 function openModal(id) {
   const p = allProducts.find(x => x.id === id);
   if (!p) return;
   currentProductId = id;
+  galleryIndex = 0;
 
   const backdrop = document.getElementById('modal-backdrop');
   const content  = document.getElementById('modal-content');
+  const imgs     = p.images && p.images.length > 0 ? p.images : [];
 
-  const imgHtml = p.images && p.images.length > 0
-    ? `<div class="modal-img"><img src="${escHtml(p.images[0])}" alt="${escHtml(p.name)}"></div>` : '';
-
-  const thumbs = p.images && p.images.length > 1
-    ? `<div class="imgs-row">${p.images.slice(1).map(u =>
-        `<img class="img-thumb" src="${escHtml(u)}" alt="">`).join('')}</div>` : '';
+  const gallery = imgs.length > 0 ? `
+    <div class="gallery-wrap">
+      <!-- Imagem principal -->
+      <div class="gallery-main" id="gallery-main">
+        <img id="gallery-active-img"
+             src="${escHtml(imgs[0])}"
+             alt="${escHtml(p.name)}"
+             onclick="openZoom(${JSON.stringify(imgs).replace(/"/g,'&quot;')})">
+        ${imgs.length > 1 ? `
+          <button class="gallery-arrow gallery-prev" onclick="galleryNav(-1)">&#8249;</button>
+          <button class="gallery-arrow gallery-next" onclick="galleryNav(1)">&#8250;</button>
+          <div class="gallery-dots" id="gallery-dots">
+            ${imgs.map((_, i) => `<span class="gallery-dot${i===0?' active':''}" onclick="galleryGo(${i})"></span>`).join('')}
+          </div>` : ''}
+      </div>
+      <!-- Miniaturas -->
+      ${imgs.length > 1 ? `
+        <div class="gallery-thumbs" id="gallery-thumbs">
+          ${imgs.map((url, i) => `
+            <img src="${escHtml(url)}" alt=""
+                 class="gallery-thumb${i===0?' active':''}"
+                 onclick="galleryGo(${i})">
+          `).join('')}
+        </div>` : ''}
+    </div>` : '';
 
   const opts = [];
   for (let i = 1; i <= Math.min(Math.floor(p.price / 100), 10); i++)
@@ -274,7 +298,7 @@ function openModal(id) {
 
   if (p.sold) {
     content.innerHTML = `
-      ${imgHtml}
+      ${gallery}
       <div class="modal-body">
         <p class="modal-category">${escHtml(p.category || '')}</p>
         <p class="modal-title">${escHtml(p.name)}</p>
@@ -288,8 +312,7 @@ function openModal(id) {
       </div>`;
   } else {
     content.innerHTML = `
-      ${imgHtml}
-      ${thumbs ? `<div style="padding:0.75rem 1.75rem 0">${thumbs}</div>` : ''}
+      ${gallery}
       <div class="modal-body">
         <p class="modal-category">${escHtml(p.category || '')}</p>
         <p class="modal-title">${escHtml(p.name)}</p>
@@ -338,6 +361,86 @@ function openModal(id) {
 
   backdrop.classList.add('open');
   backdrop.onclick = e => { if (e.target === backdrop) closeModal(); };
+}
+
+// Navega pelo carrossel
+function galleryNav(dir) {
+  const p    = allProducts.find(x => x.id === currentProductId);
+  const imgs = p?.images || [];
+  galleryIndex = (galleryIndex + dir + imgs.length) % imgs.length;
+  galleryGo(galleryIndex);
+}
+
+function galleryGo(idx) {
+  const p    = allProducts.find(x => x.id === currentProductId);
+  const imgs = p?.images || [];
+  if (!imgs.length) return;
+  galleryIndex = idx;
+
+  // Troca imagem principal com animação
+  const mainImg = document.getElementById('gallery-active-img');
+  if (mainImg) {
+    mainImg.style.opacity = '0';
+    setTimeout(() => {
+      mainImg.src = imgs[idx];
+      mainImg.style.opacity = '1';
+    }, 150);
+  }
+
+  // Atualiza dots
+  document.querySelectorAll('.gallery-dot').forEach((d, i) =>
+    d.classList.toggle('active', i === idx));
+
+  // Atualiza miniaturas
+  document.querySelectorAll('.gallery-thumb').forEach((t, i) =>
+    t.classList.toggle('active', i === idx));
+}
+
+// Abre zoom em tela cheia
+function openZoom(imgsJson) {
+  const imgs = typeof imgsJson === 'string' ? JSON.parse(imgsJson) : imgsJson;
+  let zi = galleryIndex;
+
+  const overlay = document.createElement('div');
+  overlay.id = 'zoom-overlay';
+  overlay.style.cssText = `
+    position:fixed;inset:0;background:rgba(0,0,0,0.95);z-index:500;
+    display:flex;align-items:center;justify-content:center;flex-direction:column;gap:1rem;
+  `;
+
+  const render = () => {
+    overlay.innerHTML = `
+      <button onclick="document.getElementById('zoom-overlay').remove()"
+        style="position:absolute;top:1rem;right:1.25rem;background:transparent;border:none;
+               color:white;font-size:2rem;cursor:pointer;line-height:1;">✕</button>
+      <img src="${escHtml(imgs[zi])}"
+           style="max-width:92vw;max-height:80vh;object-fit:contain;border-radius:8px;
+                  transition:opacity 0.2s;">
+      ${imgs.length > 1 ? `
+        <div style="display:flex;gap:10px;align-items:center;">
+          <button onclick="zoomNav(-1)" style="background:rgba(255,255,255,0.15);border:none;
+            color:white;width:40px;height:40px;border-radius:50%;font-size:1.4rem;cursor:pointer;">‹</button>
+          <span style="color:rgba(255,255,255,0.6);font-size:13px;">${zi+1} / ${imgs.length}</span>
+          <button onclick="zoomNav(1)" style="background:rgba(255,255,255,0.15);border:none;
+            color:white;width:40px;height:40px;border-radius:50%;font-size:1.4rem;cursor:pointer;">›</button>
+        </div>
+        <div style="display:flex;gap:8px;">
+          ${imgs.map((url, i) => `
+            <img src="${escHtml(url)}" onclick="zoomGo(${i})"
+              style="width:56px;height:56px;object-fit:cover;border-radius:6px;cursor:pointer;
+                     border:2px solid ${i===zi?'var(--purple)':'rgba(255,255,255,0.2)'};
+                     opacity:${i===zi?1:0.6};transition:all 0.2s;">
+          `).join('')}
+        </div>` : ''}
+    `;
+    // Re-bind nav functions
+    window.zoomNav = (d) => { zi = (zi + d + imgs.length) % imgs.length; render(); };
+    window.zoomGo  = (i) => { zi = i; render(); };
+  };
+
+  render();
+  overlay.onclick = e => { if (e.target === overlay) overlay.remove(); };
+  document.body.appendChild(overlay);
 }
 
 function updInst(price) {
@@ -913,6 +1016,9 @@ window.adminLogout        = adminLogout;
 window.showPage           = showPage;
 window.closeModal         = closeModal;
 window.openModal          = openModal;
+window.galleryNav         = galleryNav;
+window.galleryGo          = galleryGo;
+window.openZoom           = openZoom;
 window.submitPurchase     = submitPurchase;
 window.updInst            = updInst;
 window.toggleMobileFilter = toggleMobileFilter;
