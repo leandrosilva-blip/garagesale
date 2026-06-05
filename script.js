@@ -209,9 +209,9 @@ function renderCatalog() {
       const imgHtml = p.images && p.images.length > 0
         ? `<div class="product-img">
              <img src="${escHtml(p.images[0])}" alt="${escHtml(p.name)}"
-                  onerror="this.parentElement.outerHTML='<div class=product-img-placeholder>${imgSVG()}</div>'">
+                  onerror="this.parentElement.style.display='none'">
            </div>`
-        : `<div class="product-img-placeholder">${imgSVG()}</div>`;
+        : '<div class="product-img-placeholder">' + imgSVG() + '</div>';
 
       const soldOv = p.sold
         ? `<div class="sold-overlay"><div class="sold-badge">Vendido</div></div>` : '';
@@ -226,7 +226,7 @@ function renderCatalog() {
             <span class="product-price">R$ ${fmtM(p.price)}</span>
             ${p.sold
               ? '<span style="font-size:12px;color:var(--danger)">Indisponível</span>'
-              : `<button class="btn-buy" onclick="openModal(${p.id})">Comprar</button>`}
+              : '<button class="btn-buy" onclick="openModal(' + p.id + ')">Comprar</button>'}
           </div>
         </div>`;
 
@@ -243,11 +243,11 @@ function renderCatalog() {
 }
 
 function imgSVG() {
-  return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-    <rect x="3" y="3" width="18" height="18" rx="2"/>
-    <circle cx="8.5" cy="8.5" r="1.5"/>
-    <path d="m21 15-5-5L5 21"/>
-  </svg>`;
+  return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">'
+       + '<rect x="3" y="3" width="18" height="18" rx="2"/>'
+       + '<circle cx="8.5" cy="8.5" r="1.5"/>'
+       + '<path d="m21 15-5-5L5 21"/>'
+       + '</svg>';
 }
 
 /* ══════════════════════════════════════
@@ -266,36 +266,41 @@ function openModal(id) {
   const content  = document.getElementById('modal-content');
   const imgs     = p.images && p.images.length > 0 ? p.images : [];
 
-  // Monta HTML da galeria sem interpolação aninhada para evitar caracteres extras
+  // Galeria — usando data-imgs no elemento para evitar problemas com JSON inline
   let gallery = '';
   if (imgs.length > 0) {
-    const imgsJson = JSON.stringify(imgs).replace(/"/g, '&quot;');
-    const arrowsHtml = imgs.length > 1
-      ? `<button class="gallery-arrow gallery-prev" onclick="galleryNav(-1)">&#8249;</button>
-         <button class="gallery-arrow gallery-next" onclick="galleryNav(1)">&#8250;</button>
-         <div class="gallery-dots" id="gallery-dots">
-           ${imgs.map((_, i) => `<span class="gallery-dot${i===0?' active':''}" onclick="galleryGo(${i})"></span>`).join('')}
-         </div>`
+    const dots = imgs.length > 1
+      ? imgs.map((_, i) =>
+          `<span class="gallery-dot${i===0?' active':''}" data-idx="${i}"></span>`
+        ).join('')
       : '';
-    const thumbsHtml = imgs.length > 1
+
+    const arrows = imgs.length > 1
+      ? `<button class="gallery-arrow gallery-prev" data-dir="-1">&#8249;</button>
+         <button class="gallery-arrow gallery-next" data-dir="1">&#8250;</button>
+         <div class="gallery-dots" id="gallery-dots">${dots}</div>`
+      : '';
+
+    const thumbs = imgs.length > 1
       ? `<div class="gallery-thumbs" id="gallery-thumbs">
            ${imgs.map((url, i) =>
              `<img src="${escHtml(url)}" alt=""
                    class="gallery-thumb${i===0?' active':''}"
-                   onclick="galleryGo(${i})">`
+                   data-idx="${i}">`
            ).join('')}
          </div>`
       : '';
+
     gallery = `
-      <div class="gallery-wrap">
+      <div class="gallery-wrap" id="gallery-wrap">
         <div class="gallery-main" id="gallery-main">
           <img id="gallery-active-img"
                src="${escHtml(imgs[0])}"
                alt="${escHtml(p.name)}"
-               onclick="openZoom('${imgsJson}')">
-          ${arrowsHtml}
+               id="gallery-zoom-btn">
+          ${arrows}
         </div>
-        ${thumbsHtml}
+        ${thumbs}
       </div>`;
   }
 
@@ -369,27 +374,61 @@ function openModal(id) {
   backdrop.classList.add('open');
   backdrop.onclick = e => { if (e.target === backdrop) closeModal(); };
 
-  // Swipe touch na galeria mobile
+  // Vincula eventos da galeria após render (evita onclick inline com JSON)
   setTimeout(() => {
+    const p    = allProducts.find(x => x.id === currentProductId);
+    const imgs = p?.images || [];
+
+    // Setas
+    document.querySelectorAll('.gallery-arrow').forEach(btn => {
+      btn.addEventListener('click', e => {
+        e.stopPropagation();
+        galleryNav(parseInt(btn.dataset.dir));
+      });
+    });
+
+    // Dots
+    document.querySelectorAll('.gallery-dot').forEach(dot => {
+      dot.addEventListener('click', e => {
+        e.stopPropagation();
+        galleryGo(parseInt(dot.dataset.idx));
+      });
+    });
+
+    // Miniaturas
+    document.querySelectorAll('.gallery-thumb').forEach(thumb => {
+      thumb.addEventListener('click', e => {
+        e.stopPropagation();
+        galleryGo(parseInt(thumb.dataset.idx));
+      });
+    });
+
+    // Zoom ao clicar na imagem principal
+    const mainImg = document.getElementById('gallery-active-img');
+    if (mainImg) {
+      mainImg.style.cursor = 'zoom-in';
+      mainImg.addEventListener('click', e => {
+        e.stopPropagation();
+        openZoom(imgs);
+      });
+    }
+
+    // Swipe touch na galeria
     const mainEl = document.getElementById('gallery-main');
-    if (!mainEl) return;
-    let touchStartX = 0;
-    let touchStartY = 0;
-
-    mainEl.addEventListener('touchstart', e => {
-      touchStartX = e.touches[0].clientX;
-      touchStartY = e.touches[0].clientY;
-    }, { passive: true });
-
-    mainEl.addEventListener('touchend', e => {
-      const dx = e.changedTouches[0].clientX - touchStartX;
-      const dy = e.changedTouches[0].clientY - touchStartY;
-      // Só ativa swipe horizontal (dx > dy para não conflitar com scroll)
-      if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 40) {
-        galleryNav(dx < 0 ? 1 : -1);
-      }
-    }, { passive: true });
-  }, 100);
+    if (mainEl) {
+      let tx = 0, ty = 0;
+      mainEl.addEventListener('touchstart', e => {
+        tx = e.touches[0].clientX;
+        ty = e.touches[0].clientY;
+      }, { passive: true });
+      mainEl.addEventListener('touchend', e => {
+        const dx = e.changedTouches[0].clientX - tx;
+        const dy = e.changedTouches[0].clientY - ty;
+        if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 40)
+          galleryNav(dx < 0 ? 1 : -1);
+      }, { passive: true });
+    }
+  }, 80);
 }
 
 // Navega pelo carrossel
@@ -425,9 +464,8 @@ function galleryGo(idx) {
     t.classList.toggle('active', i === idx));
 }
 
-// Abre zoom em tela cheia
-function openZoom(imgsJson) {
-  const imgs = typeof imgsJson === 'string' ? JSON.parse(imgsJson) : imgsJson;
+// Abre zoom em tela cheia — recebe array diretamente
+function openZoom(imgs) {
   let zi = galleryIndex;
 
   const overlay = document.createElement('div');
@@ -790,7 +828,7 @@ async function renderAdminProducts() {
               ? '<span class="tag tag-amber">Vendido</span>'
               : '<span class="tag tag-green">Disponível</span>'}
             ${p.sold
-              ? `<button class="reset-btn" onclick="reactivateProduct(${p.id})">Reativar</button>`
+              ? '<button class="reset-btn" onclick="reactivateProduct(' + p.id + ')">Reativar</button>'
               : ''}
             <button class="btn-danger" onclick="deleteProduct(${p.id})">Remover</button>
           </div>
