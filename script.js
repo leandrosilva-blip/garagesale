@@ -34,6 +34,10 @@ let allCategories    = [];
 let activeFilter     = null;
 let mobileFilterOpen = false;
 
+// ID único desta sessão (para reservas)
+const SESSION_ID = Math.random().toString(36).slice(2) + Date.now().toString(36);
+let realtimeChannel = null;
+
 /* ══════════════════════════════════════
    NAVEGAÇÃO
 ══════════════════════════════════════ */
@@ -46,6 +50,24 @@ async function goToCatalog() {
   showPage('page-catalog');
   activeFilter = null;
   await Promise.all([loadCategories(), loadProducts()]);
+  startRealtime();
+}
+
+// Supabase Realtime — atualiza catálogo automaticamente
+function startRealtime() {
+  if (realtimeChannel) realtimeChannel.unsubscribe();
+
+  realtimeChannel = supabase
+    .channel('catalog-changes')
+    .on('postgres_changes',
+      { event: '*', schema: 'public', table: 'products' },
+      async () => { await loadProducts(); }
+    )
+    .on('postgres_changes',
+      { event: '*', schema: 'public', table: 'reservations' },
+      async () => { await loadProducts(); }
+    )
+    .subscribe();
 }
 
 function updateHeaderStatus() {
@@ -71,31 +93,41 @@ async function loadCategories() {
 }
 
 async function loadProducts() {
-  // Carrega produtos com categoria e imagens em uma única query
-  const { data, error } = await supabase
-    .from('products')
-    .select(`
-      *,
-      categories ( id, name ),
-      product_images ( id, url, sort_order )
-    `)
-    .order('created_at');
+  const now = new Date().toISOString();
 
-  if (error) {
-    console.error('Erro ao carregar produtos:', error);
+  const [prodRes, resRes] = await Promise.all([
+    supabase
+      .from('products')
+      .select('*, categories(id,name), product_images(id,url,sort_order)')
+      .order('created_at'),
+    supabase
+      .from('reservations')
+      .select('product_id, session_id')
+      .gt('expires_at', now)
+  ]);
+
+  if (prodRes.error) {
+    console.error('Erro ao carregar produtos:', prodRes.error);
     document.getElementById('products-area').innerHTML =
       '<p class="empty-state">Erro ao carregar produtos. Tente recarregar a página.</p>';
     return;
   }
 
-  // Normaliza o formato
-  allProducts = (data || []).map(p => ({
+  // Mapa de reservas ativas (product_id → session_id)
+  const reservedMap = {};
+  (resRes.data || []).forEach(r => { reservedMap[r.product_id] = r.session_id; });
+
+  allProducts = (prodRes.data || []).map(p => ({
     ...p,
     category:    p.categories?.name || '',
     category_id: p.category_id,
     images:      (p.product_images || [])
                    .sort((a, b) => a.sort_order - b.sort_order)
-                   .map(i => i.url)
+                   .map(i => i.url),
+    // reserved: outra sessão está preenchendo o formulário
+    reserved: reservedMap[p.id] && reservedMap[p.id] !== SESSION_ID
+      ? true : false,
+    reservedByMe: reservedMap[p.id] === SESSION_ID
   }));
 
   renderCatalog();
@@ -216,21 +248,26 @@ function renderCatalog() {
       const soldOv = p.sold
         ? `<div class="sold-overlay"><div class="sold-badge">Vendido</div></div>` : '';
 
+      const reservedOv = p.reserved
+        ? `<div class="sold-overlay" style="background:rgba(155,81,224,0.6)"><div class="sold-badge" style="background:var(--purple);transform:rotate(-3deg)">Reservado</div></div>`
+        : '';
+
+      let footerAction = '';
+      if (p.sold)         footerAction = '<span style="font-size:12px;color:var(--danger)">Indisponível</span>';
+      else if (p.reserved) footerAction = '<span style="font-size:12px;color:var(--purple-light)">Em negociação</span>';
+      else                 footerAction = `<button class="btn-buy" onclick="openModal(${p.id})">Comprar</button>`;
+
       card.innerHTML = `
-        <div style="position:relative">${imgHtml}${soldOv}</div>
+        <div style="position:relative">${imgHtml}${soldOv}${reservedOv}</div>
         <div class="product-info">
           <p class="product-category">${escHtml(p.category || '')}</p>
           <p class="product-name">${escHtml(p.name)}</p>
           <p class="product-desc">${escHtml(p.description)}</p>
           <div class="product-footer">
             <span class="product-price">R$ ${fmtM(p.price)}</span>
-            ${p.sold
-              ? '<span style="font-size:12px;color:var(--danger)">Indisponível</span>'
-              : '<button class="btn-buy" onclick="openModal(' + p.id + ')">Comprar</button>'}
+            ${footerAction}
           </div>
-        </div>`;
-
-      if (!p.sold) card.addEventListener('click', e => {
+        </div>`;if (!p.sold) card.addEventListener('click', e => {
         if (!e.target.classList.contains('btn-buy')) openModal(p.id);
       });
 
@@ -308,6 +345,22 @@ function openModal(id) {
   for (let i = 1; i <= Math.min(Math.floor(p.price / 100), 10); i++)
     opts.push(`<option value="${i}">${i}x de R$ ${fmtM(p.price / i)}</option>`);
 
+  // Verifica reserva ativa de outra sessão
+  const now = new Date().toISOString();
+  const { data: resData } = await supabase
+    .from('reservations')
+    .select('session_id')
+    .eq('product_id', id)
+    .gt('expires_at', now)
+    .neq('session_id', SESSION_ID)
+    .limit(1);
+  const isReservedByOther = resData && resData.length > 0;
+
+  // Se disponível e não reservado por outro, cria reserva desta sessão
+  if (!p.sold && !isReservedByOther) {
+    createReservation(id);
+  }
+
   if (p.sold) {
     content.innerHTML = `
       ${gallery}
@@ -322,7 +375,22 @@ function openModal(id) {
           <button class="btn-cancel" onclick="closeModal()">Fechar</button>
         </div>
       </div>`;
+  } else if (isReservedByOther) {
+    content.innerHTML = `
+      ${gallery}
+      <div class="modal-body">
+        <p class="modal-category">${escHtml(p.category || '')}</p>
+        <p class="modal-title">${escHtml(p.name)}</p>
+        <div class="sold-notice" style="background:rgba(155,81,224,0.08);border-color:rgba(155,81,224,0.3);color:var(--purple-light)">
+          <strong>Outro colaborador está finalizando a compra deste item.</strong><br>
+          Aguarde alguns minutos e tente novamente.
+        </div>
+        <div class="modal-actions">
+          <button class="btn-cancel" onclick="closeModal()">Fechar</button>
+        </div>
+      </div>`;
   } else {
+    // Normal purchase form
     content.innerHTML = `
       ${gallery}
       <div class="modal-body">
@@ -536,8 +604,29 @@ function updInst(price) {
     : `${n}x de R$ ${fmtM(price / n)} na folha`;
 }
 
+// Cria reserva temporária (5 min) quando colaborador abre o formulário
+async function createReservation(productId) {
+  // Remove reserva anterior desta sessão se houver
+  await supabase.from('reservations')
+    .delete().eq('session_id', SESSION_ID);
+
+  const expiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
+  await supabase.from('reservations').insert({
+    product_id: productId,
+    session_id: SESSION_ID,
+    expires_at: expiresAt
+  });
+}
+
+// Remove reserva quando fecha o modal
+async function removeReservation() {
+  await supabase.from('reservations')
+    .delete().eq('session_id', SESSION_ID);
+}
+
 function closeModal() {
   document.getElementById('modal-backdrop').classList.remove('open');
+  if (currentProductId) removeReservation();
   currentProductId = null;
 }
 
@@ -609,6 +698,9 @@ async function submitPurchase() {
       .eq('id', currentProductId);
 
     if (soldErr) throw new Error(soldErr.message);
+
+    // Remove reserva após compra confirmada
+    await removeReservation();
 
     // Atualiza estado local
     const idx = allProducts.findIndex(p => p.id === currentProductId);
@@ -765,6 +857,13 @@ async function renderAdminOrders() {
           <span class="tag ${o.entrega === 'presencial' ? 'tag-amber' : 'tag-blue'}">
             ${o.entrega === 'presencial' ? 'Presencial' : 'Correio'}
           </span>
+          <button onclick="deleteOrder(${o.id}, ${o.product_id})"
+            style="margin-top:4px;background:rgba(224,82,82,0.08);border:1px solid rgba(224,82,82,0.25);
+                   color:#e06060;font-family:'Syne',sans-serif;font-weight:600;font-size:11px;
+                   letter-spacing:0.08em;text-transform:uppercase;padding:0.3rem 0.7rem;
+                   border-radius:6px;cursor:pointer;">
+            Apagar
+          </button>
         </div>
       </div>
     </div>`).join('');
@@ -775,6 +874,23 @@ async function clearOrders() {
   const { error } = await supabase.from('orders').delete().neq('id', 0);
   if (error) { alert('Erro: ' + error.message); return; }
   renderAdminOrders();
+}
+
+async function deleteOrder(orderId, productId) {
+  if (!confirm('Apagar este pedido? O produto voltará a ficar disponível.')) return;
+
+  // Apaga o pedido
+  const { error } = await supabase.from('orders').delete().eq('id', orderId);
+  if (error) { alert('Erro: ' + error.message); return; }
+
+  // Reativa o produto
+  if (productId) {
+    await supabase.from('products')
+      .update({ sold: false, sold_at: null }).eq('id', productId);
+  }
+
+  await renderAdminOrders();
+  await loadProducts();
 }
 
 async function exportCSV() {
@@ -1111,6 +1227,9 @@ window.switchTab          = switchTab;
 
 // Pedidos
 window.clearOrders        = clearOrders;
+window.deleteOrder        = deleteOrder;
+window.createReservation  = createReservation;
+window.removeReservation  = removeReservation;
 window.exportCSV          = exportCSV;
 window.renderAdminOrders  = renderAdminOrders;
 
