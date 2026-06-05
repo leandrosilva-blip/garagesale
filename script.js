@@ -293,7 +293,7 @@ function imgSVG() {
 // Índice da imagem atual no carrossel
 let galleryIndex = 0;
 
-function openModal(id) {
+async function openModal(id) {
   const p = allProducts.find(x => x.id === id);
   if (!p) return;
   currentProductId = id;
@@ -624,7 +624,7 @@ async function removeReservation() {
     .delete().eq('session_id', SESSION_ID);
 }
 
-function closeModal() {
+async function closeModal() {
   document.getElementById('modal-backdrop').classList.remove('open');
   if (currentProductId) removeReservation();
   currentProductId = null;
