@@ -266,31 +266,38 @@ function openModal(id) {
   const content  = document.getElementById('modal-content');
   const imgs     = p.images && p.images.length > 0 ? p.images : [];
 
-  const gallery = imgs.length > 0 ? `
-    <div class="gallery-wrap">
-      <!-- Imagem principal -->
-      <div class="gallery-main" id="gallery-main">
-        <img id="gallery-active-img"
-             src="${escHtml(imgs[0])}"
-             alt="${escHtml(p.name)}"
-             onclick="openZoom(${JSON.stringify(imgs).replace(/"/g,'&quot;')})">
-        ${imgs.length > 1 ? `
-          <button class="gallery-arrow gallery-prev" onclick="galleryNav(-1)">&#8249;</button>
-          <button class="gallery-arrow gallery-next" onclick="galleryNav(1)">&#8250;</button>
-          <div class="gallery-dots" id="gallery-dots">
-            ${imgs.map((_, i) => `<span class="gallery-dot${i===0?' active':''}" onclick="galleryGo(${i})"></span>`).join('')}
-          </div>` : ''}
-      </div>
-      <!-- Miniaturas -->
-      ${imgs.length > 1 ? `
-        <div class="gallery-thumbs" id="gallery-thumbs">
-          ${imgs.map((url, i) => `
-            <img src="${escHtml(url)}" alt=""
-                 class="gallery-thumb${i===0?' active':''}"
-                 onclick="galleryGo(${i})">
-          `).join('')}
-        </div>` : ''}
-    </div>` : '';
+  // Monta HTML da galeria sem interpolação aninhada para evitar caracteres extras
+  let gallery = '';
+  if (imgs.length > 0) {
+    const imgsJson = JSON.stringify(imgs).replace(/"/g, '&quot;');
+    const arrowsHtml = imgs.length > 1
+      ? `<button class="gallery-arrow gallery-prev" onclick="galleryNav(-1)">&#8249;</button>
+         <button class="gallery-arrow gallery-next" onclick="galleryNav(1)">&#8250;</button>
+         <div class="gallery-dots" id="gallery-dots">
+           ${imgs.map((_, i) => `<span class="gallery-dot${i===0?' active':''}" onclick="galleryGo(${i})"></span>`).join('')}
+         </div>`
+      : '';
+    const thumbsHtml = imgs.length > 1
+      ? `<div class="gallery-thumbs" id="gallery-thumbs">
+           ${imgs.map((url, i) =>
+             `<img src="${escHtml(url)}" alt=""
+                   class="gallery-thumb${i===0?' active':''}"
+                   onclick="galleryGo(${i})">`
+           ).join('')}
+         </div>`
+      : '';
+    gallery = `
+      <div class="gallery-wrap">
+        <div class="gallery-main" id="gallery-main">
+          <img id="gallery-active-img"
+               src="${escHtml(imgs[0])}"
+               alt="${escHtml(p.name)}"
+               onclick="openZoom('${imgsJson}')">
+          ${arrowsHtml}
+        </div>
+        ${thumbsHtml}
+      </div>`;
+  }
 
   const opts = [];
   for (let i = 1; i <= Math.min(Math.floor(p.price / 100), 10); i++)
