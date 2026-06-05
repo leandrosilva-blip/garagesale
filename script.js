@@ -361,6 +361,28 @@ function openModal(id) {
 
   backdrop.classList.add('open');
   backdrop.onclick = e => { if (e.target === backdrop) closeModal(); };
+
+  // Swipe touch na galeria mobile
+  setTimeout(() => {
+    const mainEl = document.getElementById('gallery-main');
+    if (!mainEl) return;
+    let touchStartX = 0;
+    let touchStartY = 0;
+
+    mainEl.addEventListener('touchstart', e => {
+      touchStartX = e.touches[0].clientX;
+      touchStartY = e.touches[0].clientY;
+    }, { passive: true });
+
+    mainEl.addEventListener('touchend', e => {
+      const dx = e.changedTouches[0].clientX - touchStartX;
+      const dy = e.changedTouches[0].clientY - touchStartY;
+      // Só ativa swipe horizontal (dx > dy para não conflitar com scroll)
+      if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 40) {
+        galleryNav(dx < 0 ? 1 : -1);
+      }
+    }, { passive: true });
+  }, 100);
 }
 
 // Navega pelo carrossel
