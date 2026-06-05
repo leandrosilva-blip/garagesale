@@ -604,13 +604,14 @@ function updInst(price) {
     : `${n}x de R$ ${fmtM(price / n)} na folha`;
 }
 
-// Cria reserva temporária (5 min) quando colaborador abre o formulário
+// Cria reserva — fica ativa até o modal ser fechado ou a compra ser concluída
 async function createReservation(productId) {
-  // Remove reserva anterior desta sessão se houver
+  // Remove qualquer reserva anterior desta sessão
   await supabase.from('reservations')
     .delete().eq('session_id', SESSION_ID);
 
-  const expiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
+  // Reserva com validade longa (24h) — será removida manualmente ao fechar o modal
+  const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
   await supabase.from('reservations').insert({
     product_id: productId,
     session_id: SESSION_ID,
@@ -618,7 +619,7 @@ async function createReservation(productId) {
   });
 }
 
-// Remove reserva quando fecha o modal
+// Remove reserva ao fechar modal ou concluir compra
 async function removeReservation() {
   await supabase.from('reservations')
     .delete().eq('session_id', SESSION_ID);
@@ -702,13 +703,17 @@ async function submitPurchase() {
     // Remove reserva após compra confirmada
     await removeReservation();
 
-    // Atualiza estado local
+    // Atualiza estado local imediatamente
     const idx = allProducts.findIndex(p => p.id === currentProductId);
     if (idx !== -1) allProducts[idx].sold = true;
 
     closeModal();
     renderCatalog();
     updateHeaderStatus();
+
+    // Força reload completo do banco — garante atualização no mobile
+    // (o Realtime pode não disparar no mesmo dispositivo que fez a ação)
+    await loadProducts();
     showSuccessPage({
       nome:          name.value.trim(),
       email:         email.value.trim(),
