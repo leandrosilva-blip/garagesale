@@ -462,6 +462,22 @@ function openZoom(imgsJson) {
 
   render();
   overlay.onclick = e => { if (e.target === overlay) overlay.remove(); };
+
+  // Swipe touch no zoom
+  let tzx = 0, tzy = 0;
+  overlay.addEventListener('touchstart', e => {
+    tzx = e.touches[0].clientX;
+    tzy = e.touches[0].clientY;
+  }, { passive: true });
+  overlay.addEventListener('touchend', e => {
+    const dx = e.changedTouches[0].clientX - tzx;
+    const dy = e.changedTouches[0].clientY - tzy;
+    if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 40) {
+      zi = (zi + (dx < 0 ? 1 : -1) + imgs.length) % imgs.length;
+      render();
+    }
+  }, { passive: true });
+
   document.body.appendChild(overlay);
 }
 
