@@ -53,21 +53,56 @@ async function goToCatalog() {
   startRealtime();
 }
 
-// Supabase Realtime — atualiza catálogo automaticamente
-function startRealtime() {
-  if (realtimeChannel) realtimeChannel.unsubscribe();
+// Supabase Realtime + polling fallback
+// O Realtime notifica outros dispositivos; o polling garante atualização
+// no próprio dispositivo caso o Realtime não dispare
+let pollingInterval = null;
 
+function startRealtime() {
+  // Para canal e polling anteriores se existirem
+  if (realtimeChannel) {
+    realtimeChannel.unsubscribe();
+    realtimeChannel = null;
+  }
+  if (pollingInterval) {
+    clearInterval(pollingInterval);
+    pollingInterval = null;
+  }
+
+  // Canal Realtime — notifica outros dispositivos em tempo real
   realtimeChannel = supabase
     .channel('catalog-changes')
     .on('postgres_changes',
       { event: '*', schema: 'public', table: 'products' },
-      async () => { await loadProducts(); }
+      async (payload) => {
+        console.log('Realtime: produto atualizado', payload);
+        await loadProducts();
+      }
     )
     .on('postgres_changes',
       { event: '*', schema: 'public', table: 'reservations' },
       async () => { await loadProducts(); }
     )
-    .subscribe();
+    .subscribe((status) => {
+      console.log('Realtime status:', status);
+    });
+
+  // Polling a cada 5s — fallback para iOS/Android e redes lentas
+  pollingInterval = setInterval(async () => {
+    await loadProducts();
+  }, 5000);
+}
+
+// Para o polling quando sai do catálogo
+function stopRealtime() {
+  if (realtimeChannel) {
+    realtimeChannel.unsubscribe();
+    realtimeChannel = null;
+  }
+  if (pollingInterval) {
+    clearInterval(pollingInterval);
+    pollingInterval = null;
+  }
 }
 
 function updateHeaderStatus() {
@@ -703,18 +738,8 @@ async function submitPurchase() {
     // Remove reserva após compra confirmada
     await removeReservation();
 
-    // Atualiza estado local imediatamente
-    const idx = allProducts.findIndex(p => p.id === currentProductId);
-    if (idx !== -1) allProducts[idx].sold = true;
-
-    closeModal();
-    renderCatalog();
-    updateHeaderStatus();
-
-    // Força reload completo do banco — garante atualização no mobile
-    // (o Realtime pode não disparar no mesmo dispositivo que fez a ação)
-    await loadProducts();
-    showSuccessPage({
+    // Salva dados para a tela de sucesso antes de fechar o modal
+    const purchaseData = {
       nome:          name.value.trim(),
       email:         email.value.trim(),
       product_name:  prod.name,
@@ -722,7 +747,23 @@ async function submitPurchase() {
       parcelas:      n,
       valor_parcela: valorParcela,
       entrega:       entrega.value
-    });
+    };
+
+    // 1. Atualiza estado local imediatamente (UI responsiva)
+    const pidToMark = currentProductId;
+    const idx = allProducts.findIndex(p => p.id === pidToMark);
+    if (idx !== -1) allProducts[idx].sold = true;
+
+    // 2. Fecha modal e renderiza catálogo com item já marcado
+    closeModal();
+    renderCatalog();
+    updateHeaderStatus();
+
+    // 3. Mostra tela de sucesso
+    showSuccessPage(purchaseData);
+
+    // 4. Recarrega do banco para garantir sincronia total
+    await loadProducts();
 
   } catch (err) {
     if (btn) { btn.disabled = false; btn.textContent = 'Confirmar compra'; }
@@ -773,6 +814,7 @@ function showSuccessPage(order) {
    ADMIN — LOGIN
 ══════════════════════════════════════ */
 function showAdmin() {
+  stopRealtime(); // Para polling ao sair do catálogo
   showPage('page-admin');
   document.getElementById('admin-auth').style.display  = 'block';
   document.getElementById('admin-panel').style.display = 'none';
@@ -1234,6 +1276,7 @@ window.switchTab          = switchTab;
 window.clearOrders        = clearOrders;
 window.deleteOrder        = deleteOrder;
 window.createReservation  = createReservation;
+window.stopRealtime       = stopRealtime;
 window.removeReservation  = removeReservation;
 window.exportCSV          = exportCSV;
 window.renderAdminOrders  = renderAdminOrders;
