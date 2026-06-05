@@ -900,3 +900,43 @@ function fmtM(v) {
   return parseFloat(v).toLocaleString('pt-BR',
     { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
+
+/* ══════════════════════════════════════
+   EXPÕE FUNÇÕES PARA O HTML
+   (necessário por causa do type="module")
+══════════════════════════════════════ */
+window.toggleTheme        = toggleTheme;
+window.goToCatalog        = goToCatalog;
+window.showAdmin          = showAdmin;
+window.checkAdmin         = checkAdmin;
+window.adminLogout        = adminLogout;
+window.showPage           = showPage;
+window.closeModal         = closeModal;
+window.openModal          = openModal;
+window.submitPurchase     = submitPurchase;
+window.updInst            = updInst;
+window.toggleMobileFilter = toggleMobileFilter;
+window.setFilter          = setFilter;
+window.setFilterMobile    = setFilterMobile;
+window.switchTab          = switchTab;
+
+// Pedidos
+window.clearOrders        = clearOrders;
+window.exportCSV          = exportCSV;
+window.renderAdminOrders  = renderAdminOrders;
+
+// Produtos
+window.addNewProduct         = addNewProduct;
+window.saveProduct           = saveProduct;
+window.deleteProduct         = deleteProduct;
+window.reactivateProduct     = reactivateProduct;
+window.uploadProductImage    = uploadProductImage;
+window.deleteProductImage    = deleteProductImage;
+window.renderAdminProducts   = renderAdminProducts;
+
+// Categorias
+window.saveNewCategory    = saveNewCategory;
+window.renameCategory     = renameCategory;
+window.deleteCategory     = deleteCategory;
+window.moveCat            = moveCat;
+window.renderAdminCategories = renderAdminCategories;
