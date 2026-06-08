@@ -63,6 +63,44 @@ async function goToCatalog() {
   startRealtime();
 }
 
+// ── Realtime + polling para atualização em tempo real ──
+let pollingInterval   = null;
+let realtimeChannelFn = null;
+
+function startRealtime() {
+  // Para qualquer canal/polling anterior
+  stopRealtime();
+
+  // Canal Realtime — notifica outros dispositivos instantaneamente
+  realtimeChannelFn = supabase
+    .channel('catalog-live-' + Date.now())
+    .on('postgres_changes',
+      { event: '*', schema: 'public', table: 'products' },
+      async () => { await loadProducts(); }
+    )
+    .on('postgres_changes',
+      { event: '*', schema: 'public', table: 'reservations' },
+      async () => { await loadProducts(); }
+    )
+    .subscribe();
+
+  // Polling a cada 5s — fallback para mobile e redes instáveis
+  pollingInterval = setInterval(async () => {
+    await loadProducts();
+  }, 5000);
+}
+
+function stopRealtime() {
+  if (realtimeChannelFn) {
+    realtimeChannelFn.unsubscribe();
+    realtimeChannelFn = null;
+  }
+  if (pollingInterval) {
+    clearInterval(pollingInterval);
+    pollingInterval = null;
+  }
+}
+
 
 async function loadCategories() {
   const { data, error } = await supabase
