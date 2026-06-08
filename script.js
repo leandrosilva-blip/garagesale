@@ -961,62 +961,74 @@ async function renderAdminSettings() {
   if (!list) return;
   list.innerHTML = '<p class="empty-state">Carregando...</p>';
 
-  const { data, error } = await supabase
-    .from('site_settings')
-    .select('value')
-    .eq('key', 'store_open')
-    .single();
+  try {
+    const { data, error } = await supabase
+      .from('site_settings')
+      .select('value')
+      .eq('key', 'store_open')
+      .single();
 
-  if (error) { list.innerHTML = `<p class="empty-state">Erro: ${escHtml(error.message)}</p>`; return; }
-
-  const isOpen = data.value === 'true';
-
-  list.innerHTML = `
-    <div class="admin-card">
-      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:1rem;">
-        <div>
-          <p style="font-family:'Syne',sans-serif;font-weight:700;
-                    font-size:1.1rem;color:var(--white);margin-bottom:0.3rem;">
-            Status da loja
+    // Se tabela não existe ainda, mostra instrução
+    if (error) {
+      list.innerHTML = `
+        <div class="admin-card">
+          <p style="color:var(--danger);font-weight:600;margin-bottom:0.5rem;">
+            ⚠️ Tabela site_settings não encontrada
           </p>
-          <p style="font-size:13px;color:var(--muted);">
-            Controla se os colaboradores podem realizar compras. O catálogo permanece visível.
+          <p style="font-size:13px;color:var(--muted);line-height:1.7;">
+            Execute o SQL abaixo no Supabase SQL Editor:
           </p>
-        </div>
-        <span class="tag ${isOpen ? 'tag-green' : 'tag-amber'}" style="font-size:13px;padding:0.4rem 1rem;">
-          ${isOpen ? '🟢 Aberta' : '🔴 Fechada'}
-        </span>
-      </div>
+          <pre style="background:var(--bg3);border:1px solid var(--border);border-radius:8px;
+                      padding:1rem;margin-top:0.75rem;font-size:12px;color:var(--text);
+                      overflow-x:auto;white-space:pre-wrap;">
+create table site_settings (
+  key   text primary key,
+  value text not null
+);
+insert into site_settings (key, value) values ('store_open', 'false');
+alter table site_settings enable row level security;
+create policy "public read settings" on site_settings for select using (true);
+create policy "admin update settings" on site_settings for update using (auth.role() = 'authenticated');</pre>
+        </div>`;
+      return;
+    }
 
-      <div style="margin-top:1.5rem;display:flex;gap:0.75rem;flex-wrap:wrap;">
-        <button
-          onclick="toggleStore(true)"
-          class="btn-primary"
-          style="${isOpen ? 'opacity:0.4;pointer-events:none;' : ''}"
-          ${isOpen ? 'disabled' : ''}>
-          🟢 Abrir loja
-        </button>
-        <button
-          onclick="toggleStore(false)"
-          class="btn-danger"
-          style="margin-left:0;padding:0.9rem 2rem;border-radius:10px;font-size:14px;
-                 ${!isOpen ? 'opacity:0.4;pointer-events:none;' : ''}"
-          ${!isOpen ? 'disabled' : ''}>
-          🔴 Fechar loja
-        </button>
-      </div>
+    const isOpen = data.value === 'true';
+    const statusTag  = isOpen
+      ? '<span class="tag tag-green" style="font-size:13px;padding:0.4rem 1rem;">🟢 Aberta</span>'
+      : '<span class="tag tag-amber" style="font-size:13px;padding:0.4rem 1rem;">🔴 Fechada</span>';
 
-      <div style="margin-top:1.5rem;padding-top:1.5rem;border-top:1px solid var(--border);">
-        <p style="font-size:12px;color:var(--muted);line-height:1.7;">
-          <strong style="color:var(--text);">Loja aberta:</strong>
-          colaboradores conseguem visualizar os produtos e realizar compras.<br>
-          <strong style="color:var(--text);">Loja fechada:</strong>
-          os colaboradores visualizam normalmente o catálogo e os preços,
-          mas o botão Comprar fica desativado com aviso de "Vendas fechadas".
-        </p>
-      </div>
-    </div>
-  `;
+    const openBtn = isOpen
+      ? '<button class="btn-primary" disabled style="opacity:0.4;cursor:not-allowed;">🟢 Abrir loja</button>'
+      : '<button class="btn-primary" onclick="toggleStore(true)">🟢 Abrir loja</button>';
+
+    const closeBtn = isOpen
+      ? '<button class="btn-danger" onclick="toggleStore(false)" style="margin-left:0;padding:0.9rem 2rem;border-radius:10px;font-size:14px;">🔴 Fechar loja</button>'
+      : '<button class="btn-danger" disabled style="margin-left:0;padding:0.9rem 2rem;border-radius:10px;font-size:14px;opacity:0.4;cursor:not-allowed;">🔴 Fechar loja</button>';
+
+    list.innerHTML =
+      '<div class="admin-card">' +
+        '<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:1rem;">' +
+          '<div>' +
+            '<p style="font-family:Syne,sans-serif;font-weight:700;font-size:1.1rem;color:var(--white);margin-bottom:0.3rem;">Status da loja</p>' +
+            '<p style="font-size:13px;color:var(--muted);">Controla se os colaboradores podem comprar. O catálogo permanece visível.</p>' +
+          '</div>' +
+          statusTag +
+        '</div>' +
+        '<div style="margin-top:1.5rem;display:flex;gap:0.75rem;flex-wrap:wrap;">' +
+          openBtn + closeBtn +
+        '</div>' +
+        '<div style="margin-top:1.5rem;padding-top:1.5rem;border-top:1px solid var(--border);">' +
+          '<p style="font-size:12px;color:var(--muted);line-height:1.7;">' +
+            '<strong style="color:var(--text);">Loja aberta:</strong> colaboradores podem visualizar e comprar os produtos.<br>' +
+            '<strong style="color:var(--text);">Loja fechada:</strong> colaboradores visualizam o catálogo e preços, mas o botão Comprar fica desativado.' +
+          '</p>' +
+        '</div>' +
+      '</div>';
+
+  } catch(err) {
+    list.innerHTML = '<p class="empty-state">Erro: ' + escHtml(err.message) + '</p>';
+  }
 }
 
 async function toggleStore(open) {
@@ -1027,13 +1039,11 @@ async function toggleStore(open) {
 
   if (error) { alert('Erro: ' + error.message); return; }
 
-  // Re-renderiza o painel de configurações
+  storeOpen = open;
   await renderAdminSettings();
-
-  // Feedback visual
-  const status = open ? 'aberta' : 'fechada';
-  alert(`✅ Loja ${status} com sucesso!`);
+  alert(open ? '✅ Loja aberta! Colaboradores já podem comprar.' : '✅ Loja fechada! Compras desativadas.');
 }
+
 
 async function exportCSV() {
   const { data, error } = await supabase
@@ -1346,6 +1356,53 @@ function fmtM(v) {
 }
 
 /* ══════════════════════════════════════
+   LIMPA RESERVA AO SAIR/RECARREGAR
+   Garante que nenhum produto fique preso
+   como "reservado" se a pessoa fechar ou
+   recarregar a página durante o formulário
+══════════════════════════════════════ */
+
+// Tenta limpar via fetch síncrono (mais confiável no unload)
+async function cleanupReservation() {
+  try {
+    await supabase.from('reservations')
+      .delete().eq('session_id', SESSION_ID);
+  } catch(e) { /* silencioso */ }
+}
+
+// Página fechando ou recarregando
+window.addEventListener('beforeunload', () => {
+  // navigator.sendBeacon é a forma mais confiável de enviar dados no unload
+  // Usamos o endpoint REST do Supabase diretamente
+  const url = 'https://mupajexrxmsvyadjvrht.supabase.co/rest/v1/reservations?session_id=eq.' + SESSION_ID;
+  navigator.sendBeacon(url + '&_method=DELETE',
+    new Blob([JSON.stringify({})], { type: 'application/json' })
+  );
+});
+
+// Página ficou oculta (minimizou app, trocou aba) — limpa após 30s de inatividade
+let hiddenTimer = null;
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    // Se sumir por mais de 30 segundos, limpa a reserva
+    hiddenTimer = setTimeout(async () => {
+      if (currentProductId) {
+        await cleanupReservation();
+        // Atualiza o produto local para não reservado
+        const idx = allProducts.findIndex(p => p.id === currentProductId);
+        if (idx !== -1) allProducts[idx].reserved = false;
+      }
+    }, 30000);
+  } else {
+    // Voltou — cancela o timer
+    if (hiddenTimer) {
+      clearTimeout(hiddenTimer);
+      hiddenTimer = null;
+    }
+  }
+});
+
+/* ══════════════════════════════════════
    EXPÕE FUNÇÕES PARA O HTML
    (necessário por causa do type="module")
 ══════════════════════════════════════ */
@@ -1372,6 +1429,7 @@ window.clearOrders        = clearOrders;
 window.deleteOrder        = deleteOrder;
 window.createReservation  = createReservation;
 window.stopRealtime       = stopRealtime;
+window.cleanupReservation = cleanupReservation;
 window.toggleStore        = toggleStore;
 window.renderAdminSettings = renderAdminSettings;
 window.removeReservation  = removeReservation;
