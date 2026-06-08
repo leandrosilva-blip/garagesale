@@ -33,6 +33,7 @@ let allProducts      = [];
 let allCategories    = [];
 let activeFilter     = null;
 let mobileFilterOpen = false;
+let storeOpen        = false; // controlado pelo admin
 
 // ID único desta sessão (para reservas)
 const SESSION_ID = Math.random().toString(36).slice(2) + Date.now().toString(36);
@@ -47,74 +48,22 @@ function showPage(id) {
 }
 
 async function goToCatalog() {
+  // Busca status da loja — apenas bloqueia compra, não o acesso ao catálogo
+  const { data: setting } = await supabase
+    .from('site_settings')
+    .select('value')
+    .eq('key', 'store_open')
+    .single();
+
+  storeOpen = setting?.value === 'true';
+
   showPage('page-catalog');
   activeFilter = null;
   await Promise.all([loadCategories(), loadProducts()]);
   startRealtime();
 }
 
-// Supabase Realtime + polling fallback
-// O Realtime notifica outros dispositivos; o polling garante atualização
-// no próprio dispositivo caso o Realtime não dispare
-let pollingInterval = null;
 
-function startRealtime() {
-  // Para canal e polling anteriores se existirem
-  if (realtimeChannel) {
-    realtimeChannel.unsubscribe();
-    realtimeChannel = null;
-  }
-  if (pollingInterval) {
-    clearInterval(pollingInterval);
-    pollingInterval = null;
-  }
-
-  // Canal Realtime — notifica outros dispositivos em tempo real
-  realtimeChannel = supabase
-    .channel('catalog-changes')
-    .on('postgres_changes',
-      { event: '*', schema: 'public', table: 'products' },
-      async (payload) => {
-        console.log('Realtime: produto atualizado', payload);
-        await loadProducts();
-      }
-    )
-    .on('postgres_changes',
-      { event: '*', schema: 'public', table: 'reservations' },
-      async () => { await loadProducts(); }
-    )
-    .subscribe((status) => {
-      console.log('Realtime status:', status);
-    });
-
-  // Polling a cada 5s — fallback para iOS/Android e redes lentas
-  pollingInterval = setInterval(async () => {
-    await loadProducts();
-  }, 5000);
-}
-
-// Para o polling quando sai do catálogo
-function stopRealtime() {
-  if (realtimeChannel) {
-    realtimeChannel.unsubscribe();
-    realtimeChannel = null;
-  }
-  if (pollingInterval) {
-    clearInterval(pollingInterval);
-    pollingInterval = null;
-  }
-}
-
-function updateHeaderStatus() {
-  const avail = allProducts.filter(p => !p.sold).length;
-  const el = document.getElementById('header-status');
-  el.textContent = document.getElementById('page-catalog').classList.contains('active')
-    ? avail + ' disponível' + (avail !== 1 ? 'is' : '') : '';
-}
-
-/* ══════════════════════════════════════
-   CARREGAR DADOS
-══════════════════════════════════════ */
 async function loadCategories() {
   const { data, error } = await supabase
     .from('categories')
@@ -125,6 +74,37 @@ async function loadCategories() {
   allCategories = data || [];
   renderFilterBar();
   renderMobileFilter();
+}
+
+// Atualiza o banner de status no topo do catálogo
+function updateStoreBanner() {
+  const existing = document.getElementById('store-banner');
+  if (existing) existing.remove();
+  if (storeOpen) return; // sem banner quando aberta
+
+  const header = document.querySelector('.catalog-header');
+  if (!header) return;
+
+  const banner = document.createElement('div');
+  banner.id = 'store-banner';
+  banner.style.cssText = `
+    background: rgba(155,81,224,0.08);
+    border: 1px solid var(--purple-dark);
+    border-radius: 10px;
+    padding: 0.75rem 1.25rem;
+    margin: 0 2.5rem 1rem;
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    font-size: 13px;
+    color: var(--purple-light);
+  `;
+  banner.innerHTML = `
+    <span style="font-size:1.1rem;">🔒</span>
+    <span>Visualização disponível, mas as <strong>vendas estão temporariamente fechadas</strong>.
+    Aguarde a abertura do próximo período.</span>
+  `;
+  header.insertAdjacentElement('afterend', banner);
 }
 
 async function loadProducts() {
@@ -290,6 +270,7 @@ function renderCatalog() {
       let footerAction = '';
       if (p.sold)         footerAction = '<span style="font-size:12px;color:var(--danger)">Indisponível</span>';
       else if (p.reserved) footerAction = '<span style="font-size:12px;color:var(--purple-light)">Em negociação</span>';
+      else if (!storeOpen)   footerAction = '<span style="font-size:11px;color:var(--muted);border:1px solid var(--border);padding:0.4rem 0.8rem;border-radius:6px;">Vendas fechadas</span>';
       else                 footerAction = `<button class="btn-buy" onclick="openModal(${p.id})">Comprar</button>`;
 
       card.innerHTML = `
@@ -312,6 +293,7 @@ function renderCatalog() {
 
   if (!hasAny) area.innerHTML = '<p class="empty-state">Nenhum produto cadastrado ainda.</p>';
   updateHeaderStatus();
+  updateStoreBanner();
 }
 
 function imgSVG() {
@@ -476,6 +458,58 @@ async function openModal(id) {
 
   backdrop.classList.add('open');
   backdrop.onclick = e => { if (e.target === backdrop) closeModal(); };
+
+  // Injeta barra de swipe no topo do modal (mobile)
+  setTimeout(() => {
+    const modalEl = document.getElementById('modal-content');
+    if (!modalEl) return;
+
+    // Adiciona barra indicadora
+    const bar = document.createElement('div');
+    bar.className = 'modal-swipe-bar';
+    modalEl.insertBefore(bar, modalEl.firstChild);
+
+    // Swipe down para fechar (mobile)
+    let startY = 0;
+    let startScrollTop = 0;
+    let dragging = false;
+
+    modalEl.addEventListener('touchstart', e => {
+      startY = e.touches[0].clientY;
+      startScrollTop = modalEl.scrollTop;
+      dragging = true;
+    }, { passive: true });
+
+    modalEl.addEventListener('touchmove', e => {
+      if (!dragging) return;
+      const dy = e.touches[0].clientY - startY;
+      // Só ativa se o modal estiver no topo do scroll e arrastando para baixo
+      if (dy > 0 && startScrollTop === 0) {
+        modalEl.style.transform = `translateY(${Math.min(dy * 0.5, 120)}px)`;
+        modalEl.style.transition = 'none';
+      }
+    }, { passive: true });
+
+    modalEl.addEventListener('touchend', e => {
+      if (!dragging) return;
+      dragging = false;
+      const dy = e.changedTouches[0].clientY - startY;
+      modalEl.style.transition = 'transform 0.3s ease';
+
+      if (dy > 100 && startScrollTop === 0) {
+        // Arrasto suficiente — fecha o modal com animação
+        modalEl.style.transform = 'translateY(100%)';
+        setTimeout(() => {
+          modalEl.style.transform = '';
+          modalEl.style.transition = '';
+          closeModal();
+        }, 280);
+      } else {
+        // Volta para posição original
+        modalEl.style.transform = '';
+      }
+    }, { passive: true });
+  }, 80);
 
   // Vincula eventos da galeria após render (evita onclick inline com JSON)
   setTimeout(() => {
@@ -692,64 +726,42 @@ async function submitPurchase() {
   if (btn) { btn.disabled = true; btn.textContent = 'Aguarde...'; }
 
   try {
-    // Verifica se ainda está disponível
-    const { data: prod } = await supabase
-      .from('products')
-      .select('id, sold, price, name')
-      .eq('id', currentProductId)
-      .single();
+    // Chama a função RPC que faz tudo atomicamente com SECURITY DEFINER
+    // (bypassa o RLS garantindo que o produto seja marcado como vendido)
+    const { data: result, error: rpcErr } = await supabase.rpc('finalizar_compra', {
+      p_product_id:   currentProductId,
+      p_nome:         name.value.trim(),
+      p_email:        email.value.trim(),
+      p_parcelas:     parseInt(parcelas.value),
+      p_entrega:      entrega.value,
+      p_session_id:   SESSION_ID
+    });
 
-    if (prod.sold) {
+    if (rpcErr) throw new Error(rpcErr.message);
+
+    // A função retorna status: 'ok' ou 'already_sold'
+    if (result.status === 'already_sold') {
       const idx = allProducts.findIndex(p => p.id === currentProductId);
       if (idx !== -1) allProducts[idx].sold = true;
-      renderCatalog();
       if (btn) { btn.disabled = false; btn.textContent = 'Confirmar compra'; }
-      openModal(currentProductId);
+      closeModal();
+      await loadProducts();
+      alert('Este produto acabou de ser comprado por outro colaborador.');
       return;
     }
 
-    const n            = parseInt(parcelas.value);
-    const valorParcela = (prod.price / n).toFixed(2);
-
-    // Cria o pedido
-    const { error: orderErr } = await supabase
-      .from('orders')
-      .insert({
-        product_id:    prod.id,
-        product_name:  prod.name,
-        product_price: prod.price,
-        nome:          name.value.trim(),
-        email:         email.value.trim(),
-        parcelas:      n,
-        valor_parcela: valorParcela,
-        entrega:       entrega.value
-      });
-
-    if (orderErr) throw new Error(orderErr.message);
-
-    // Marca produto como vendido
-    const { error: soldErr } = await supabase
-      .from('products')
-      .update({ sold: true, sold_at: new Date().toISOString() })
-      .eq('id', currentProductId);
-
-    if (soldErr) throw new Error(soldErr.message);
-
-    // Remove reserva após compra confirmada
-    await removeReservation();
-
-    // Salva dados para a tela de sucesso antes de fechar o modal
+    // Compra bem-sucedida
     const purchaseData = {
       nome:          name.value.trim(),
       email:         email.value.trim(),
-      product_name:  prod.name,
-      product_price: prod.price,
-      parcelas:      n,
-      valor_parcela: valorParcela,
+      product_name:  result.product_name,
+      product_price: result.product_price,
+      parcelas:      parseInt(parcelas.value),
+      valor_parcela: result.valor_parcela,
       entrega:       entrega.value
     };
 
-    // 1. Atualiza estado local imediatamente (UI responsiva)
+    // 1. Atualiza estado local imediatamente
     const pidToMark = currentProductId;
     const idx = allProducts.findIndex(p => p.id === pidToMark);
     if (idx !== -1) allProducts[idx].sold = true;
@@ -853,7 +865,7 @@ async function adminLogout() {
 }
 
 function switchTab(tab) {
-  const tabs = ['orders', 'products', 'categories'];
+  const tabs = ['orders', 'products', 'categories', 'settings'];
   document.querySelectorAll('.tab-btn').forEach((b, i) =>
     b.classList.toggle('active', tabs[i] === tab));
   tabs.forEach(t => {
@@ -863,6 +875,7 @@ function switchTab(tab) {
   if (tab === 'categories') renderAdminCategories();
   if (tab === 'products')   renderAdminProducts();
   if (tab === 'orders')     renderAdminOrders();
+  if (tab === 'settings')   renderAdminSettings();
 }
 
 /* ══════════════════════════════════════
@@ -938,6 +951,88 @@ async function deleteOrder(orderId, productId) {
 
   await renderAdminOrders();
   await loadProducts();
+}
+
+/* ══════════════════════════════════════
+   ADMIN — CONFIGURAÇÕES (LOJA)
+══════════════════════════════════════ */
+async function renderAdminSettings() {
+  const list = document.getElementById('settings-content');
+  if (!list) return;
+  list.innerHTML = '<p class="empty-state">Carregando...</p>';
+
+  const { data, error } = await supabase
+    .from('site_settings')
+    .select('value')
+    .eq('key', 'store_open')
+    .single();
+
+  if (error) { list.innerHTML = `<p class="empty-state">Erro: ${escHtml(error.message)}</p>`; return; }
+
+  const isOpen = data.value === 'true';
+
+  list.innerHTML = `
+    <div class="admin-card">
+      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:1rem;">
+        <div>
+          <p style="font-family:'Syne',sans-serif;font-weight:700;
+                    font-size:1.1rem;color:var(--white);margin-bottom:0.3rem;">
+            Status da loja
+          </p>
+          <p style="font-size:13px;color:var(--muted);">
+            Controla se os colaboradores podem realizar compras. O catálogo permanece visível.
+          </p>
+        </div>
+        <span class="tag ${isOpen ? 'tag-green' : 'tag-amber'}" style="font-size:13px;padding:0.4rem 1rem;">
+          ${isOpen ? '🟢 Aberta' : '🔴 Fechada'}
+        </span>
+      </div>
+
+      <div style="margin-top:1.5rem;display:flex;gap:0.75rem;flex-wrap:wrap;">
+        <button
+          onclick="toggleStore(true)"
+          class="btn-primary"
+          style="${isOpen ? 'opacity:0.4;pointer-events:none;' : ''}"
+          ${isOpen ? 'disabled' : ''}>
+          🟢 Abrir loja
+        </button>
+        <button
+          onclick="toggleStore(false)"
+          class="btn-danger"
+          style="margin-left:0;padding:0.9rem 2rem;border-radius:10px;font-size:14px;
+                 ${!isOpen ? 'opacity:0.4;pointer-events:none;' : ''}"
+          ${!isOpen ? 'disabled' : ''}>
+          🔴 Fechar loja
+        </button>
+      </div>
+
+      <div style="margin-top:1.5rem;padding-top:1.5rem;border-top:1px solid var(--border);">
+        <p style="font-size:12px;color:var(--muted);line-height:1.7;">
+          <strong style="color:var(--text);">Loja aberta:</strong>
+          colaboradores conseguem visualizar os produtos e realizar compras.<br>
+          <strong style="color:var(--text);">Loja fechada:</strong>
+          os colaboradores visualizam normalmente o catálogo e os preços,
+          mas o botão Comprar fica desativado com aviso de "Vendas fechadas".
+        </p>
+      </div>
+    </div>
+  `;
+}
+
+async function toggleStore(open) {
+  const { error } = await supabase
+    .from('site_settings')
+    .update({ value: open ? 'true' : 'false' })
+    .eq('key', 'store_open');
+
+  if (error) { alert('Erro: ' + error.message); return; }
+
+  // Re-renderiza o painel de configurações
+  await renderAdminSettings();
+
+  // Feedback visual
+  const status = open ? 'aberta' : 'fechada';
+  alert(`✅ Loja ${status} com sucesso!`);
 }
 
 async function exportCSV() {
@@ -1277,6 +1372,8 @@ window.clearOrders        = clearOrders;
 window.deleteOrder        = deleteOrder;
 window.createReservation  = createReservation;
 window.stopRealtime       = stopRealtime;
+window.toggleStore        = toggleStore;
+window.renderAdminSettings = renderAdminSettings;
 window.removeReservation  = removeReservation;
 window.exportCSV          = exportCSV;
 window.renderAdminOrders  = renderAdminOrders;
