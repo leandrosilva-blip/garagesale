@@ -861,6 +861,23 @@ function showSuccessPage(order) {
 }
 
 /* ══════════════════════════════════════
+   DIAGNÓSTICO — verifica permissões RLS
+══════════════════════════════════════ */
+async function checkPermissions() {
+  const tests = [
+    { table: 'categories', op: 'select' },
+    { table: 'products',   op: 'select' },
+    { table: 'orders',     op: 'select' },
+  ];
+  const results = [];
+  for (const t of tests) {
+    const { error } = await supabase.from(t.table).select('id').limit(1);
+    results.push(t.table + ': ' + (error ? '❌ ' + error.message : '✅'));
+  }
+  console.log('RLS check:', results.join(' | '));
+}
+
+/* ══════════════════════════════════════
    ADMIN — LOGIN
 ══════════════════════════════════════ */
 function showAdmin() {
@@ -969,26 +986,32 @@ async function renderAdminOrders() {
 
 async function clearOrders() {
   if (!confirm('Apagar TODOS os pedidos?')) return;
-  const { error } = await supabase.from('orders').delete().neq('id', 0);
-  if (error) { alert('Erro: ' + error.message); return; }
-  renderAdminOrders();
+  try {
+    const { error } = await supabase.from('orders').delete().neq('id', 0);
+    if (error) throw new Error(error.message);
+    await renderAdminOrders();
+  } catch(err) {
+    alert('Erro: ' + err.message);
+  }
 }
 
 async function deleteOrder(orderId, productId) {
   if (!confirm('Apagar este pedido? O produto voltará a ficar disponível.')) return;
+  try {
+    const { error } = await supabase.from('orders').delete().eq('id', orderId);
+    if (error) throw new Error(error.message);
 
-  // Apaga o pedido
-  const { error } = await supabase.from('orders').delete().eq('id', orderId);
-  if (error) { alert('Erro: ' + error.message); return; }
+    if (productId) {
+      const { error: e2 } = await supabase.from('products')
+        .update({ sold: false, sold_at: null }).eq('id', productId);
+      if (e2) throw new Error(e2.message);
+    }
 
-  // Reativa o produto
-  if (productId) {
-    await supabase.from('products')
-      .update({ sold: false, sold_at: null }).eq('id', productId);
+    // Re-render immediately without page reload
+    await Promise.all([renderAdminOrders(), loadProducts()]);
+  } catch(err) {
+    alert('Erro ao apagar pedido: ' + err.message);
   }
-
-  await renderAdminOrders();
-  await loadProducts();
 }
 
 /* ══════════════════════════════════════
@@ -1179,21 +1202,32 @@ async function renderAdminProducts() {
 }
 
 async function saveProduct(id) {
-  const { error } = await supabase
-    .from('products')
-    .update({
-      name:        document.getElementById(`pname-${id}`).value.trim(),
-      category_id: document.getElementById(`pcat-${id}`).value || null,
-      description: document.getElementById(`pdesc-${id}`).value.trim(),
-      price:       parseFloat(document.getElementById(`pprice-${id}`).value) || 0,
-      updated_at:  new Date().toISOString()
-    })
-    .eq('id', id);
-
-  if (error) { alert('Erro: ' + error.message); return; }
-  await loadProducts();
-  await renderAdminProducts();
-  alert('Produto salvo!');
+  const btn = document.querySelector(`#pedit-${id} .btn-save`);
+  if (btn) { btn.disabled = true; btn.textContent = 'Salvando...'; }
+  try {
+    const { error } = await supabase
+      .from('products')
+      .update({
+        name:        document.getElementById(`pname-${id}`).value.trim(),
+        category_id: document.getElementById(`pcat-${id}`).value || null,
+        description: document.getElementById(`pdesc-${id}`).value.trim(),
+        price:       parseFloat(document.getElementById(`pprice-${id}`).value) || 0,
+        updated_at:  new Date().toISOString()
+      })
+      .eq('id', id);
+    if (error) throw new Error(error.message);
+    await loadProducts();
+    await renderAdminProducts();
+    // Flash success on button
+    const newBtn = document.querySelector(`#pedit-${id} .btn-save`);
+    if (newBtn) {
+      newBtn.textContent = '✅ Salvo!';
+      setTimeout(() => { newBtn.textContent = 'Salvar dados'; }, 2000);
+    }
+  } catch(err) {
+    if (btn) { btn.disabled = false; btn.textContent = 'Salvar dados'; }
+    alert('Erro ao salvar produto: ' + err.message);
+  }
 }
 
 async function uploadProductImage(id) {
@@ -1263,16 +1297,21 @@ async function reactivateProduct(id) {
 }
 
 async function addNewProduct() {
-  const { data, error } = await supabase
-    .from('products')
-    .insert({ name: 'Novo produto', price: 100, description: '' })
-    .select()
-    .single();
-  if (error) { alert('Erro: ' + error.message); return; }
-  await loadProducts();
-  await renderAdminProducts();
-  const el = document.getElementById(`pedit-${data.id}`);
-  if (el) el.scrollIntoView({ behavior: 'smooth' });
+  try {
+    const { data, error } = await supabase
+      .from('products')
+      .insert({ name: 'Novo produto', price: 100, description: '' })
+      .select()
+      .single();
+    if (error) throw new Error(error.message);
+    // Re-render immediately with updated data
+    await loadProducts();
+    await renderAdminProducts();
+    const el = document.getElementById(`pedit-${data.id}`);
+    if (el) el.scrollIntoView({ behavior: 'smooth' });
+  } catch(err) {
+    alert('Erro ao criar produto: ' + err.message);
+  }
 }
 
 /* ══════════════════════════════════════
@@ -1334,36 +1373,55 @@ async function saveNewCategory() {
   const name  = input.value.trim();
   if (!name) { alert('Digite um nome.'); return; }
 
-  const { data: last } = await supabase
-    .from('categories').select('sort_order').order('sort_order', { ascending: false }).limit(1);
-  const nextOrder = last && last.length ? last[0].sort_order + 1 : 1;
+  const btn = event?.target;
+  if (btn) { btn.disabled = true; btn.textContent = 'Salvando...'; }
 
-  const { error } = await supabase
-    .from('categories').insert({ name, sort_order: nextOrder });
-  if (error) { alert('Erro: ' + error.message); return; }
+  try {
+    const { data: last } = await supabase
+      .from('categories').select('sort_order').order('sort_order', { ascending: false }).limit(1);
+    const nextOrder = last && last.length ? last[0].sort_order + 1 : 1;
 
-  input.value = '';
-  await loadCategories();
-  await renderAdminCategories();
+    const { error } = await supabase
+      .from('categories').insert({ name, sort_order: nextOrder });
+    if (error) throw new Error(error.message);
+
+    input.value = '';
+    await loadCategories();
+    await renderAdminCategories();
+  } catch(err) {
+    alert('Erro ao criar categoria: ' + err.message);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Adicionar categoria'; }
+  }
 }
 
 async function renameCategory(id) {
   const newName = document.getElementById(`cat-edit-${id}`).value.trim();
   if (!newName) { alert('Nome não pode ser vazio.'); return; }
-  const { error } = await supabase
-    .from('categories').update({ name: newName }).eq('id', id);
-  if (error) { alert('Erro: ' + error.message); return; }
-  await loadCategories();
-  await renderAdminCategories();
-  await loadProducts();
+
+  try {
+    const { error } = await supabase
+      .from('categories').update({ name: newName }).eq('id', id);
+    if (error) throw new Error(error.message);
+    await loadCategories();
+    await renderAdminCategories();
+    await loadProducts();
+  } catch(err) {
+    alert('Erro ao renomear: ' + err.message);
+  }
 }
 
 async function deleteCategory(id) {
   if (!confirm('Remover esta categoria? Produtos ficarão sem categoria.')) return;
-  const { error } = await supabase.from('categories').delete().eq('id', id);
-  if (error) { alert('Erro: ' + error.message); return; }
-  await loadCategories();
-  await renderAdminCategories();
+  try {
+    const { error } = await supabase.from('categories').delete().eq('id', id);
+    if (error) throw new Error(error.message);
+    await loadCategories();
+    await renderAdminCategories();
+    await loadProducts();
+  } catch(err) {
+    alert('Erro ao remover categoria: ' + err.message);
+  }
 }
 
 async function moveCat(id, idx, dir, ids) {
