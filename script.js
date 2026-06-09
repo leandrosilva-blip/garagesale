@@ -183,8 +183,34 @@ async function loadProducts() {
     reservedByMe: reservedMap[p.id] === SESSION_ID
   }));
 
-  renderCatalog();
-  updateHeaderStatus();
+  // Só renderiza o catálogo se estiver na página de compras
+  const catalogPage = document.getElementById('page-catalog');
+  if (catalogPage && catalogPage.classList.contains('active')) {
+    renderCatalog();
+    updateHeaderStatus();
+    updateStoreBanner();
+  }
+}
+
+// Recarrega apenas allProducts sem tocar na UI do catálogo
+// Usado pelas funções do admin para manter allProducts atualizado
+async function reloadAdminProducts() {
+  const { data } = await supabase
+    .from('products')
+    .select('*, categories(id,name), product_images(id,url,sort_order)')
+    .order('created_at');
+  if (data) {
+    allProducts = data.map(p => ({
+      ...p,
+      category:    p.categories?.name || '',
+      category_id: p.category_id,
+      images:      (p.product_images || [])
+                     .sort((a, b) => a.sort_order - b.sort_order)
+                     .map(i => i.url),
+      reserved:     false,
+      reservedByMe: false
+    }));
+  }
 }
 
 /* ══════════════════════════════════════
@@ -907,9 +933,10 @@ async function checkAdmin() {
   document.getElementById('admin-user-badge').textContent =
     (currentUser.user_metadata?.name || email) + ' · Admin';
 
-  await renderAdminOrders();
-  await renderAdminProducts();
-  await renderAdminCategories();
+  // Carrega dados base que o admin precisa
+  await Promise.all([renderAdminOrders(), renderAdminCategories()]);
+  await renderAdminProducts(); // depende de allCategories já carregado
+  await renderAdminSettings();
   switchTab('orders');
 }
 
@@ -1008,7 +1035,7 @@ async function deleteOrder(orderId, productId) {
     }
 
     // Re-render immediately without page reload
-    await Promise.all([renderAdminOrders(), loadProducts()]);
+    await Promise.all([renderAdminOrders(), reloadAdminProducts()]);
   } catch(err) {
     alert('Erro ao apagar pedido: ' + err.message);
   }
@@ -1144,8 +1171,16 @@ async function renderAdminProducts() {
   if (error) { list.innerHTML = `<p class="empty-state">Erro: ${escHtml(error.message)}</p>`; return; }
   if (!data.length) { list.innerHTML = '<p class="empty-state">Nenhum produto.</p>'; return; }
 
+  // Busca categorias frescas para o select (não depende de allCategories)
+  const { data: freshCats } = await supabase
+    .from('categories').select('id, name').order('sort_order');
+  const cats = freshCats || [];
+
   list.innerHTML = data.map(p => {
     const imgs = (p.product_images || []).sort((a,b) => a.sort_order - b.sort_order);
+    const catOptions = cats.map(cat =>
+      `<option value="${cat.id}" ${p.category_id === cat.id ? 'selected':''}>${escHtml(cat.name)}</option>`
+    ).join('');
     return `
       <div class="product-edit-card" id="pedit-${p.id}">
         <div style="display:flex;align-items:center;justify-content:space-between;
@@ -1167,9 +1202,7 @@ async function renderAdminProducts() {
         <label>Categoria</label>
         <select id="pcat-${p.id}">
           <option value="">Sem categoria</option>
-          ${allCategories.map(c =>
-            `<option value="${c.id}" ${p.category_id === c.id ? 'selected':''}>${escHtml(c.name)}</option>`
-          ).join('')}
+          ${catOptions}
         </select>
         <label>Descrição / avarias</label>
         <textarea rows="3" id="pdesc-${p.id}">${escHtml(p.description || '')}</textarea>
@@ -1216,7 +1249,7 @@ async function saveProduct(id) {
       })
       .eq('id', id);
     if (error) throw new Error(error.message);
-    await loadProducts();
+    await reloadAdminProducts();
     await renderAdminProducts();
     // Flash success on button
     const newBtn = document.querySelector(`#pedit-${id} .btn-save`);
@@ -1266,7 +1299,7 @@ async function uploadProductImage(id) {
 
   if (dbErr) { alert('Erro ao salvar imagem: ' + dbErr.message); return; }
 
-  await loadProducts();
+  await reloadAdminProducts();
   await renderAdminProducts();
   alert('Foto enviada!');
 }
@@ -1276,7 +1309,7 @@ async function deleteProductImage(imgId, productId) {
   const { error } = await supabase
     .from('product_images').delete().eq('id', imgId);
   if (error) { alert('Erro: ' + error.message); return; }
-  await loadProducts();
+  await reloadAdminProducts();
   await renderAdminProducts();
 }
 
@@ -1284,7 +1317,7 @@ async function deleteProduct(id) {
   if (!confirm('Remover este produto?')) return;
   const { error } = await supabase.from('products').delete().eq('id', id);
   if (error) { alert('Erro: ' + error.message); return; }
-  await loadProducts();
+  await reloadAdminProducts();
   await renderAdminProducts();
 }
 
@@ -1292,7 +1325,7 @@ async function reactivateProduct(id) {
   const { error } = await supabase
     .from('products').update({ sold: false, sold_at: null }).eq('id', id);
   if (error) { alert('Erro: ' + error.message); return; }
-  await loadProducts();
+  await reloadAdminProducts();
   await renderAdminProducts();
 }
 
@@ -1305,7 +1338,7 @@ async function addNewProduct() {
       .single();
     if (error) throw new Error(error.message);
     // Re-render immediately with updated data
-    await loadProducts();
+    await reloadAdminProducts();
     await renderAdminProducts();
     const el = document.getElementById(`pedit-${data.id}`);
     if (el) el.scrollIntoView({ behavior: 'smooth' });
@@ -1319,54 +1352,57 @@ async function addNewProduct() {
 ══════════════════════════════════════ */
 async function renderAdminCategories() {
   const list = document.getElementById('categories-list');
+  if (!list) return;
   list.innerHTML = '<p class="empty-state">Carregando...</p>';
 
-  const { data: cats, error } = await supabase
-    .from('categories').select('*').order('sort_order');
-  if (error) { list.innerHTML = `<p class="empty-state">Erro: ${escHtml(error.message)}</p>`; return; }
+  try {
+    const { data: cats, error } = await supabase
+      .from('categories').select('*').order('sort_order');
+    if (error) throw new Error(error.message);
 
-  const { data: prods } = await supabase.from('products').select('category_id');
+    // Always update global allCategories
+    allCategories = cats || [];
 
-  list.innerHTML = cats.map((c, i) => {
-    const count = (prods || []).filter(p => p.category_id === c.id).length;
-    return `
-      <div class="admin-card" style="display:flex;align-items:center;
-            justify-content:space-between;flex-wrap:wrap;gap:0.75rem;">
-        <div style="display:flex;align-items:center;gap:0.75rem;">
-          <div style="display:flex;flex-direction:column;gap:4px;">
-            <button onclick="moveCat(${c.id}, ${i}, -1, ${JSON.stringify(cats.map(x=>x.id))})"
-              ${i === 0 ? 'disabled' : ''}
-              style="background:transparent;border:1px solid var(--border);color:var(--muted);
-                     border-radius:4px;width:24px;height:24px;cursor:pointer;font-size:11px;
-                     ${i === 0 ? 'opacity:0.3;' : ''}">▲</button>
-            <button onclick="moveCat(${c.id}, ${i}, 1, ${JSON.stringify(cats.map(x=>x.id))})"
-              ${i === cats.length-1 ? 'disabled' : ''}
-              style="background:transparent;border:1px solid var(--border);color:var(--muted);
-                     border-radius:4px;width:24px;height:24px;cursor:pointer;font-size:11px;
-                     ${i === cats.length-1 ? 'opacity:0.3;' : ''}">▼</button>
-          </div>
-          <div>
-            <p style="font-family:'Syne',sans-serif;font-weight:700;
-                      color:var(--white);font-size:1rem;">${escHtml(c.name)}</p>
-            <p style="font-size:12px;color:var(--muted);margin-top:2px;">
-              ${count} produto${count !== 1 ? 's' : ''}
-            </p>
-          </div>
-        </div>
-        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
-          <input type="text" value="${escHtml(c.name)}" id="cat-edit-${c.id}"
-            style="background:var(--input-bg);border:1px solid var(--border);border-radius:6px;
-                   color:var(--text);font-size:13px;padding:0.4rem 0.7rem;outline:none;width:160px;">
-          <button class="btn-save" style="margin-top:0;" onclick="renameCategory(${c.id})">
-            Renomear
-          </button>
-          <button class="btn-danger" style="margin-left:0;" onclick="deleteCategory(${c.id})">
-            Remover
-          </button>
-        </div>
-      </div>`;
-  }).join('');
+    const { data: prods } = await supabase
+      .from('products').select('category_id');
+
+    if (!cats.length) {
+      list.innerHTML = '<p class="empty-state">Nenhuma categoria.</p>';
+      return;
+    }
+
+    list.innerHTML = cats.map((cat, i) => {
+      const count = (prods || []).filter(p => p.category_id === cat.id).length;
+      const upDisabled   = i === 0            ? 'disabled style="opacity:0.3;"' : '';
+      const downDisabled = i === cats.length-1 ? 'disabled style="opacity:0.3;"' : '';
+      const idsJson      = JSON.stringify(cats.map(x => x.id));
+
+      return '<div class="admin-card" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:0.75rem;">' +
+        '<div style="display:flex;align-items:center;gap:0.75rem;">' +
+          '<div style="display:flex;flex-direction:column;gap:4px;">' +
+            '<button onclick="moveCat(' + cat.id + ',' + i + ',-1,' + escHtml(idsJson) + ')" ' + upDisabled +
+              ' style="background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:4px;width:24px;height:24px;cursor:pointer;font-size:11px;">▲</button>' +
+            '<button onclick="moveCat(' + cat.id + ',' + i + ',1,' + escHtml(idsJson) + ')" ' + downDisabled +
+              ' style="background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:4px;width:24px;height:24px;cursor:pointer;font-size:11px;">▼</button>' +
+          '</div>' +
+          '<div>' +
+            '<p style="font-family:Syne,sans-serif;font-weight:700;color:var(--white);font-size:1rem;">' + escHtml(cat.name) + '</p>' +
+            '<p style="font-size:12px;color:var(--muted);margin-top:2px;">' + count + ' produto' + (count !== 1 ? 's' : '') + '</p>' +
+          '</div>' +
+        '</div>' +
+        '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">' +
+          '<input type="text" value="' + escHtml(cat.name) + '" id="cat-edit-' + cat.id + '"' +
+            ' style="background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;padding:0.4rem 0.7rem;outline:none;width:160px;">' +
+          '<button class="btn-save" style="margin-top:0;" onclick="renameCategory(' + cat.id + ')">Renomear</button>' +
+          '<button class="btn-danger" style="margin-left:0;" onclick="deleteCategory(' + cat.id + ')">Remover</button>' +
+        '</div>' +
+      '</div>';
+    }).join('');
+  } catch(err) {
+    list.innerHTML = '<p class="empty-state">Erro: ' + escHtml(err.message) + '</p>';
+  }
 }
+
 
 async function saveNewCategory() {
   const input = document.getElementById('new-cat-name');
@@ -1405,7 +1441,7 @@ async function renameCategory(id) {
     if (error) throw new Error(error.message);
     await loadCategories();
     await renderAdminCategories();
-    await loadProducts();
+    await reloadAdminProducts();
   } catch(err) {
     alert('Erro ao renomear: ' + err.message);
   }
@@ -1418,7 +1454,7 @@ async function deleteCategory(id) {
     if (error) throw new Error(error.message);
     await loadCategories();
     await renderAdminCategories();
-    await loadProducts();
+    await reloadAdminProducts();
   } catch(err) {
     alert('Erro ao remover categoria: ' + err.message);
   }
@@ -1524,7 +1560,8 @@ window.switchTab          = switchTab;
 window.clearOrders        = clearOrders;
 window.deleteOrder        = deleteOrder;
 window.createReservation  = createReservation;
-window.stopRealtime       = stopRealtime;
+window.stopRealtime          = stopRealtime;
+window.reloadAdminProducts   = reloadAdminProducts;
 window.cleanupReservation = cleanupReservation;
 window.toggleStore        = toggleStore;
 window.renderAdminSettings = renderAdminSettings;
