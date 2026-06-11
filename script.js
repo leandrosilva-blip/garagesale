@@ -88,26 +88,49 @@ let pollingInterval   = null;
 let realtimeChannelFn = null;
 
 function startRealtime() {
-  // Para qualquer canal/polling anterior
   stopRealtime();
 
   // Canal Realtime — notifica outros dispositivos instantaneamente
   realtimeChannelFn = supabase
     .channel('catalog-live-' + Date.now())
     .on('postgres_changes',
-      { event: '*', schema: 'public', table: 'products' },
+      { event: 'UPDATE', schema: 'public', table: 'products' },
+      async (payload) => {
+        // Atualiza o produto específico localmente sem recarregar tudo
+        const updated = payload.new;
+        if (updated) {
+          const idx = allProducts.findIndex(p => p.id === updated.id);
+          if (idx !== -1) {
+            allProducts[idx].sold    = updated.sold;
+            allProducts[idx].sold_at = updated.sold_at;
+          }
+        }
+        renderCatalog();
+        updateHeaderStatus();
+        // Recarrega completo para pegar imagens e categoria
+        await loadProducts();
+      }
+    )
+    .on('postgres_changes',
+      { event: 'INSERT', schema: 'public', table: 'products' },
+      async () => { await loadProducts(); }
+    )
+    .on('postgres_changes',
+      { event: 'DELETE', schema: 'public', table: 'products' },
       async () => { await loadProducts(); }
     )
     .on('postgres_changes',
       { event: '*', schema: 'public', table: 'reservations' },
       async () => { await loadProducts(); }
     )
-    .subscribe();
+    .subscribe((status) => {
+      console.log('[Realtime]', status);
+    });
 
-  // Polling a cada 5s — fallback para mobile e redes instáveis
+  // Polling a cada 3s — fallback garantido para todos os dispositivos
   pollingInterval = setInterval(async () => {
     await loadProducts();
-  }, 5000);
+  }, 3000);
 }
 
 function stopRealtime() {
@@ -893,13 +916,32 @@ async function submitPurchase() {
     const valorParcela = (prod.price / n).toFixed(2);
 
     // 2. Marca produto como vendido PRIMEIRO (evita compra dupla)
-    const { error: soldErr } = await supabase
+    const { error: soldErr, count } = await supabase
       .from('products')
       .update({ sold: true, sold_at: new Date().toISOString() })
       .eq('id', currentProductId)
-      .eq('sold', false); // só atualiza se ainda não foi vendido
+      .eq('sold', false) // só atualiza se ainda não foi vendido
+      .select('id');
 
     if (soldErr) throw new Error(soldErr.message);
+
+    // Se count === 0 significa que outro colaborador comprou enquanto preenchia
+    // Verifica novamente buscando o produto atualizado
+    const { data: recheckProd } = await supabase
+      .from('products').select('sold').eq('id', currentProductId).single();
+
+    if (recheckProd?.sold && prod.sold === false) {
+      // Produto foi vendido por outra pessoa durante o preenchimento
+      if (btn) { btn.disabled = false; btn.textContent = 'Confirmar compra'; }
+      await removeReservation();
+      const idx = allProducts.findIndex(p => p.id === currentProductId);
+      if (idx !== -1) allProducts[idx].sold = true;
+      closeModal();
+      renderCatalog();
+      updateHeaderStatus();
+      alert('⚠️ Este produto foi adquirido por outro colaborador enquanto você preenchia o formulário.');
+      return;
+    }
 
     // 3. Cria o pedido
     const { error: orderErr } = await supabase
@@ -1674,6 +1716,9 @@ document.addEventListener('visibilitychange', () => {
    (necessário por causa do type="module")
 ══════════════════════════════════════ */
 window.toggleTheme        = toggleTheme;
+window.updateHeaderStatus = updateHeaderStatus;
+window.renderCatalog      = renderCatalog;
+window.loadProducts       = loadProducts;
 window.goToCatalog        = goToCatalog;
 window.showAdmin          = showAdmin;
 window.checkAdmin         = checkAdmin;
