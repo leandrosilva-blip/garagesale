@@ -35,22 +35,24 @@ let activeFilter     = null;
 let mobileFilterOpen = false;
 let storeOpen        = false; // controlado pelo admin
 
-// ID único desta sessão (para reservas)
-const SESSION_ID = Math.random().toString(36).slice(2) + Date.now().toString(36);
+// ID único por carregamento de página — muda a cada refresh
+const SESSION_ID = 'sess_' + Math.random().toString(36).slice(2) + '_' + Date.now();
 let realtimeChannel = null;
 
-// Limpa IMEDIATAMENTE qualquer reserva antiga desta sessão ao carregar a página
-// Resolve o problema de produto ficar preso como "reservado" após refresh
-(async function clearOldReservation() {
+// Ao carregar: limpa TODAS as reservas expiradas (há mais de 10 minutos)
+// Isso garante que reservas de sessões anteriores não travam produtos
+(async function clearExpiredReservations() {
   try {
+    const tenMinutesAgo = new Date(Date.now() - 10 * 60 * 1000).toISOString();
     await fetch(
-      'https://mupajexrxmsvyadjvrht.supabase.co/rest/v1/reservations?session_id=eq.' + SESSION_ID,
+      'https://mupajexrxmsvyadjvrht.supabase.co/rest/v1/reservations?created_at=lt.' + encodeURIComponent(tenMinutesAgo),
       {
         method:  'DELETE',
         headers: {
           'apikey':        'sb_publishable_N4bOCHs1zbd4rPqqEy0hUw_kQpNET98',
           'Authorization': 'Bearer sb_publishable_N4bOCHs1zbd4rPqqEy0hUw_kQpNET98',
-          'Content-Type':  'application/json'
+          'Content-Type':  'application/json',
+          'Prefer':        'return=minimal'
         }
       }
     );
@@ -479,6 +481,38 @@ async function openModal(id) {
       </div>`;
     backdrop.classList.add('open');
     backdrop.onclick = e => { if (e.target === backdrop) closeModal(); };
+
+    // Vincula eventos da galeria mesmo com loja fechada
+    setTimeout(() => {
+      document.querySelectorAll('.gallery-arrow').forEach(btn => {
+        btn.addEventListener('click', ev => { ev.stopPropagation(); galleryNav(parseInt(btn.dataset.dir)); });
+      });
+      document.querySelectorAll('.gallery-dot').forEach(dot => {
+        dot.addEventListener('click', ev => { ev.stopPropagation(); galleryGo(parseInt(dot.dataset.idx)); });
+      });
+      document.querySelectorAll('.gallery-thumb').forEach(thumb => {
+        thumb.addEventListener('click', ev => { ev.stopPropagation(); galleryGo(parseInt(thumb.dataset.idx)); });
+      });
+      const mainImg = document.getElementById('gallery-active-img');
+      if (mainImg) {
+        mainImg.style.cursor = 'zoom-in';
+        mainImg.addEventListener('click', ev => {
+          ev.stopPropagation();
+          const imgs = allProducts.find(x => x.id === currentProductId)?.images || [];
+          openZoom(imgs);
+        });
+      }
+      const mainEl = document.getElementById('gallery-main');
+      if (mainEl) {
+        let tx = 0, ty = 0;
+        mainEl.addEventListener('touchstart', e => { tx = e.touches[0].clientX; ty = e.touches[0].clientY; }, { passive: true });
+        mainEl.addEventListener('touchend',   e => {
+          const dx = e.changedTouches[0].clientX - tx;
+          const dy = e.changedTouches[0].clientY - ty;
+          if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 40) galleryNav(dx < 0 ? 1 : -1);
+        }, { passive: true });
+      }
+    }, 80);
     return;
   }
 
@@ -1240,68 +1274,95 @@ async function renderAdminProducts() {
   if (error) { list.innerHTML = `<p class="empty-state">Erro: ${escHtml(error.message)}</p>`; return; }
   if (!data.length) { list.innerHTML = '<p class="empty-state">Nenhum produto.</p>'; return; }
 
-  // Busca categorias frescas para o select (não depende de allCategories)
   const { data: freshCats } = await supabase
     .from('categories').select('id, name').order('sort_order');
   const cats = freshCats || [];
 
   list.innerHTML = data.map(p => {
-    const imgs = (p.product_images || []).sort((a,b) => a.sort_order - b.sort_order);
+    const imgs      = (p.product_images || []).sort((a,b) => a.sort_order - b.sort_order);
     const catOptions = cats.map(cat =>
       `<option value="${cat.id}" ${p.category_id === cat.id ? 'selected':''}>${escHtml(cat.name)}</option>`
     ).join('');
+    const statusTag = p.sold
+      ? '<span class="tag tag-amber">Vendido</span>'
+      : '<span class="tag tag-green">Disponível</span>';
+    const reativar = p.sold
+      ? `<button class="reset-btn" onclick="reactivateProduct(${p.id})">Reativar</button>` : '';
+
     return `
-      <div class="product-edit-card" id="pedit-${p.id}">
-        <div style="display:flex;align-items:center;justify-content:space-between;
-                    margin-bottom:1rem;flex-wrap:wrap;gap:0.5rem;">
-          <span style="font-family:'Syne',sans-serif;font-weight:700;
-                       font-size:1rem;color:var(--white)">${escHtml(p.name)}</span>
+      <div class="product-edit-card" id="pedit-${p.id}" style="padding:0;overflow:hidden;">
+
+        <!-- Cabeçalho clicável para expandir/recolher -->
+        <div onclick="toggleProductCard(${p.id})"
+             style="display:flex;align-items:center;justify-content:space-between;
+                    flex-wrap:wrap;gap:0.5rem;padding:1rem 1.25rem;cursor:pointer;
+                    user-select:none;">
+          <div style="display:flex;align-items:center;gap:0.75rem;">
+            ${imgs.length > 0
+              ? `<img src="${escHtml(imgs[0].url)}" style="width:44px;height:44px;object-fit:cover;border-radius:6px;border:1px solid var(--border);flex-shrink:0;">`
+              : `<div style="width:44px;height:44px;border-radius:6px;border:1px solid var(--border);background:var(--bg3);flex-shrink:0;"></div>`}
+            <div>
+              <p style="font-family:Syne,sans-serif;font-weight:700;font-size:0.95rem;color:var(--white);">${escHtml(p.name)}</p>
+              <p style="font-size:11px;color:var(--muted);margin-top:1px;">R$ ${fmtM(p.price)} · ${escHtml(p.categories?.name || 'Sem categoria')}</p>
+            </div>
+          </div>
           <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
-            ${p.sold
-              ? '<span class="tag tag-amber">Vendido</span>'
-              : '<span class="tag tag-green">Disponível</span>'}
-            ${p.sold
-              ? '<button class="reset-btn" onclick="reactivateProduct(' + p.id + ')">Reativar</button>'
-              : ''}
-            <button class="btn-danger" onclick="deleteProduct(${p.id})">Remover</button>
+            ${statusTag}
+            ${reativar}
+            <button class="btn-danger" onclick="event.stopPropagation();deleteProduct(${p.id})" style="margin-left:0;">Remover</button>
+            <span id="arrow-${p.id}" style="color:var(--muted);font-size:1.1rem;transition:transform 0.2s;">▼</span>
           </div>
         </div>
-        <label>Nome do produto</label>
-        <input type="text" value="${escHtml(p.name)}" id="pname-${p.id}">
-        <label>Categoria</label>
-        <select id="pcat-${p.id}">
-          <option value="">Sem categoria</option>
-          ${catOptions}
-        </select>
-        <label>Descrição / avarias</label>
-        <textarea rows="3" id="pdesc-${p.id}">${escHtml(p.description || '')}</textarea>
-        <label>Preço (R$)</label>
-        <input type="number" value="${p.price}" id="pprice-${p.id}" min="0" step="0.01">
-        <label>Fotos atuais</label>
-        <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:8px;">
-          ${imgs.map(img =>
-            `<div style="position:relative;">
-               <img src="${escHtml(img.url)}"
-                    style="width:80px;height:80px;object-fit:cover;border-radius:6px;
-                           border:1px solid var(--border);">
-               <button onclick="deleteProductImage(${img.id}, ${p.id})"
-                 style="position:absolute;top:-6px;right:-6px;width:20px;height:20px;
-                        border-radius:50%;background:var(--danger);border:none;
-                        color:white;cursor:pointer;font-size:12px;line-height:1;">✕</button>
-             </div>`
-          ).join('')}
-        </div>
-        <label>Adicionar foto</label>
-        <input type="file" id="pfile-${p.id}" accept="image/jpeg,image/png,image/webp"
-               style="background:var(--input-bg);border:1px solid var(--border);
-                      border-radius:8px;color:var(--text);padding:0.5rem;width:100%;">
-        <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-top:1rem;">
-          <button class="btn-save" onclick="saveProduct(${p.id})">Salvar dados</button>
-          <button class="btn-save" onclick="uploadProductImage(${p.id})">Enviar foto</button>
+
+        <!-- Corpo expansível (começa fechado) -->
+        <div id="body-${p.id}" style="display:none;padding:0 1.25rem 1.25rem;border-top:1px solid var(--border);">
+          <div style="height:0.75rem;"></div>
+          <label>Nome do produto</label>
+          <input type="text" value="${escHtml(p.name)}" id="pname-${p.id}">
+          <label>Categoria</label>
+          <select id="pcat-${p.id}">
+            <option value="">Sem categoria</option>
+            ${catOptions}
+          </select>
+          <label>Descrição / avarias</label>
+          <textarea rows="3" id="pdesc-${p.id}">${escHtml(p.description || '')}</textarea>
+          <label>Preço (R$)</label>
+          <input type="number" value="${p.price}" id="pprice-${p.id}" min="0" step="0.01">
+          <label>Fotos atuais</label>
+          <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:8px;">
+            ${imgs.map(img =>
+              `<div style="position:relative;">
+                 <img src="${escHtml(img.url)}"
+                      style="width:80px;height:80px;object-fit:cover;border-radius:6px;border:1px solid var(--border);">
+                 <button onclick="deleteProductImage(${img.id}, ${p.id})"
+                   style="position:absolute;top:-6px;right:-6px;width:20px;height:20px;
+                          border-radius:50%;background:var(--danger);border:none;
+                          color:white;cursor:pointer;font-size:12px;line-height:1;">✕</button>
+               </div>`
+            ).join('')}
+          </div>
+          <label>Adicionar foto</label>
+          <input type="file" id="pfile-${p.id}" accept="image/jpeg,image/png,image/webp"
+                 style="background:var(--input-bg);border:1px solid var(--border);
+                        border-radius:8px;color:var(--text);padding:0.5rem;width:100%;">
+          <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-top:1rem;">
+            <button class="btn-save" onclick="saveProduct(${p.id})">Salvar dados</button>
+            <button class="btn-save" onclick="uploadProductImage(${p.id})">Enviar foto</button>
+          </div>
         </div>
       </div>`;
   }).join('');
 }
+
+function toggleProductCard(id) {
+  const body  = document.getElementById('body-'  + id);
+  const arrow = document.getElementById('arrow-' + id);
+  if (!body) return;
+  const isOpen = body.style.display !== 'none';
+  body.style.display  = isOpen ? 'none' : 'block';
+  arrow.style.transform = isOpen ? '' : 'rotate(180deg)';
+}
+
 
 async function saveProduct(id) {
   const btn = document.querySelector(`#pedit-${id} .btn-save`);
@@ -1636,6 +1697,7 @@ window.deleteOrder        = deleteOrder;
 window.createReservation  = createReservation;
 window.stopRealtime          = stopRealtime;
 window.reloadAdminProducts   = reloadAdminProducts;
+window.toggleProductCard     = toggleProductCard;
 window.cleanupReservation = cleanupReservation;
 window.toggleStore        = toggleStore;
 window.renderAdminSettings = renderAdminSettings;
