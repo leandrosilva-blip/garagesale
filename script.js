@@ -39,6 +39,24 @@ let storeOpen        = false; // controlado pelo admin
 const SESSION_ID = Math.random().toString(36).slice(2) + Date.now().toString(36);
 let realtimeChannel = null;
 
+// Limpa IMEDIATAMENTE qualquer reserva antiga desta sessão ao carregar a página
+// Resolve o problema de produto ficar preso como "reservado" após refresh
+(async function clearOldReservation() {
+  try {
+    await fetch(
+      'https://mupajexrxmsvyadjvrht.supabase.co/rest/v1/reservations?session_id=eq.' + SESSION_ID,
+      {
+        method:  'DELETE',
+        headers: {
+          'apikey':        'sb_publishable_N4bOCHs1zbd4rPqqEy0hUw_kQpNET98',
+          'Authorization': 'Bearer sb_publishable_N4bOCHs1zbd4rPqqEy0hUw_kQpNET98',
+          'Content-Type':  'application/json'
+        }
+      }
+    );
+  } catch(e) { /* silencioso */ }
+})();
+
 /* ══════════════════════════════════════
    NAVEGAÇÃO
 ══════════════════════════════════════ */
@@ -442,6 +460,28 @@ async function openModal(id) {
     createReservation(id);
   }
 
+  if (!storeOpen) {
+    // Loja fechada — só mostra detalhes sem formulário de compra
+    content.innerHTML = `
+      ${gallery}
+      <div class="modal-body">
+        <p class="modal-category">${escHtml(p.category || '')}</p>
+        <p class="modal-title">${escHtml(p.name)}</p>
+        <p class="modal-desc">${escHtml(p.description)}</p>
+        <p class="modal-price">R$ ${fmtM(p.price)}</p>
+        <div class="sold-notice" style="background:rgba(155,81,224,0.08);border-color:rgba(155,81,224,0.3);color:var(--purple-light)">
+          🔒 <strong>Vendas temporariamente fechadas.</strong><br>
+          Você pode visualizar os produtos, mas as compras não estão disponíveis no momento.
+        </div>
+        <div class="modal-actions">
+          <button class="btn-cancel" onclick="closeModal()">Fechar</button>
+        </div>
+      </div>`;
+    backdrop.classList.add('open');
+    backdrop.onclick = e => { if (e.target === backdrop) closeModal(); };
+    return;
+  }
+
   if (p.sold) {
     content.innerHTML = `
       ${gallery}
@@ -768,6 +808,12 @@ async function closeModal() {
    FINALIZAR COMPRA
 ══════════════════════════════════════ */
 async function submitPurchase() {
+  // Se a loja está fechada, bloqueia silenciosamente
+  if (!storeOpen) {
+    closeModal();
+    return;
+  }
+
   const name     = document.getElementById('f-name');
   const email    = document.getElementById('f-email');
   const parcelas = document.getElementById('f-parcelas');
@@ -779,7 +825,7 @@ async function submitPurchase() {
     inp.classList.toggle('error', show);
   };
 
-  setErr('fr-name', name, !name.value.trim());
+  setErr('fr-name',  name,  !name.value.trim());
   if (!name.value.trim()) valid = false;
   const eOk = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.value.trim());
   setErr('fr-email', email, !eOk);
@@ -790,55 +836,77 @@ async function submitPurchase() {
   if (btn) { btn.disabled = true; btn.textContent = 'Aguarde...'; }
 
   try {
-    // Chama a função RPC que faz tudo atomicamente com SECURITY DEFINER
-    // (bypassa o RLS garantindo que o produto seja marcado como vendido)
-    const { data: result, error: rpcErr } = await supabase.rpc('finalizar_compra', {
-      p_product_id:   currentProductId,
-      p_nome:         name.value.trim(),
-      p_email:        email.value.trim(),
-      p_parcelas:     parseInt(parcelas.value),
-      p_entrega:      entrega.value,
-      p_session_id:   SESSION_ID
-    });
+    // 1. Verifica se produto ainda está disponível (direto no banco)
+    const { data: prod, error: prodErr } = await supabase
+      .from('products')
+      .select('id, name, price, sold')
+      .eq('id', currentProductId)
+      .single();
 
-    if (rpcErr) throw new Error(rpcErr.message);
+    if (prodErr) throw new Error(prodErr.message);
 
-    // A função retorna status: 'ok' ou 'already_sold'
-    if (result.status === 'already_sold') {
-      const idx = allProducts.findIndex(p => p.id === currentProductId);
-      if (idx !== -1) allProducts[idx].sold = true;
+    if (prod.sold) {
       if (btn) { btn.disabled = false; btn.textContent = 'Confirmar compra'; }
       closeModal();
-      await loadProducts();
+      const idx = allProducts.findIndex(p => p.id === currentProductId);
+      if (idx !== -1) allProducts[idx].sold = true;
+      renderCatalog();
       alert('Este produto acabou de ser comprado por outro colaborador.');
       return;
     }
 
-    // Compra bem-sucedida
+    const n            = parseInt(parcelas.value);
+    const valorParcela = (prod.price / n).toFixed(2);
+
+    // 2. Marca produto como vendido PRIMEIRO (evita compra dupla)
+    const { error: soldErr } = await supabase
+      .from('products')
+      .update({ sold: true, sold_at: new Date().toISOString() })
+      .eq('id', currentProductId)
+      .eq('sold', false); // só atualiza se ainda não foi vendido
+
+    if (soldErr) throw new Error(soldErr.message);
+
+    // 3. Cria o pedido
+    const { error: orderErr } = await supabase
+      .from('orders')
+      .insert({
+        product_id:    prod.id,
+        product_name:  prod.name,
+        product_price: prod.price,
+        nome:          name.value.trim(),
+        email:         email.value.trim(),
+        parcelas:      n,
+        valor_parcela: valorParcela,
+        entrega:       entrega.value
+      });
+
+    if (orderErr) throw new Error(orderErr.message);
+
+    // 4. Remove reserva
+    await removeReservation();
+
     const purchaseData = {
       nome:          name.value.trim(),
       email:         email.value.trim(),
-      product_name:  result.product_name,
-      product_price: result.product_price,
-      parcelas:      parseInt(parcelas.value),
-      valor_parcela: result.valor_parcela,
+      product_name:  prod.name,
+      product_price: prod.price,
+      parcelas:      n,
+      valor_parcela: valorParcela,
       entrega:       entrega.value
     };
 
-    // 1. Atualiza estado local imediatamente
-    const pidToMark = currentProductId;
-    const idx = allProducts.findIndex(p => p.id === pidToMark);
-    if (idx !== -1) allProducts[idx].sold = true;
+    // 5. Atualiza estado local imediatamente
+    const idx = allProducts.findIndex(p => p.id === currentProductId);
+    if (idx !== -1) { allProducts[idx].sold = true; allProducts[idx].reserved = false; }
 
-    // 2. Fecha modal e renderiza catálogo com item já marcado
+    // 6. Fecha modal e atualiza catálogo
     closeModal();
     renderCatalog();
     updateHeaderStatus();
-
-    // 3. Mostra tela de sucesso
     showSuccessPage(purchaseData);
 
-    // 4. Recarrega do banco para garantir sincronia total
+    // 7. Recarrega do banco para sincronia total
     await loadProducts();
 
   } catch (err) {
@@ -846,6 +914,7 @@ async function submitPurchase() {
     alert('Erro ao finalizar compra: ' + err.message);
   }
 }
+
 
 function showSuccessPage(order) {
   const wrap = document.createElement('div');
@@ -1504,12 +1573,17 @@ async function cleanupReservation() {
 
 // Página fechando ou recarregando
 window.addEventListener('beforeunload', () => {
-  // navigator.sendBeacon é a forma mais confiável de enviar dados no unload
-  // Usamos o endpoint REST do Supabase diretamente
+  // Usa fetch keepalive — mais confiável que sendBeacon para DELETE
   const url = 'https://mupajexrxmsvyadjvrht.supabase.co/rest/v1/reservations?session_id=eq.' + SESSION_ID;
-  navigator.sendBeacon(url + '&_method=DELETE',
-    new Blob([JSON.stringify({})], { type: 'application/json' })
-  );
+  fetch(url, {
+    method:    'DELETE',
+    keepalive: true,
+    headers: {
+      'apikey':        'sb_publishable_N4bOCHs1zbd4rPqqEy0hUw_kQpNET98',
+      'Authorization': 'Bearer sb_publishable_N4bOCHs1zbd4rPqqEy0hUw_kQpNET98',
+      'Content-Type':  'application/json'
+    }
+  }).catch(() => {});
 });
 
 // Página ficou oculta (minimizou app, trocou aba) — limpa após 30s de inatividade
