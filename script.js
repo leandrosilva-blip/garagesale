@@ -381,26 +381,37 @@ function buildGallery(p) {
   const imgs = p.images || [];
   if (!imgs.length) return '';
 
-  const arrows = imgs.length > 1
-    ? `<button class="gallery-arrow gallery-prev" data-dir="-1">&#8249;</button>
-       <button class="gallery-arrow gallery-next" data-dir="1">&#8250;</button>
-       <div class="gallery-dots" id="gallery-dots">
-         ${imgs.map((_, i) => `<span class="gallery-dot${i===0?' active':''}" data-idx="${i}"></span>`).join('')}
-       </div>` : '';
+  // Monta cada parte separadamente com concatenação — evita caracteres estranhos
+  // que surgem de template literals ternários aninhados
+  let arrows = '';
+  let thumbs = '';
 
-  const thumbs = imgs.length > 1
-    ? `<div class="gallery-thumbs">
-         ${imgs.map((url, i) => `<img src="${escHtml(url)}" alt="" class="gallery-thumb${i===0?' active':''}" data-idx="${i}">`).join('')}
-       </div>` : '';
+  if (imgs.length > 1) {
+    const dots = imgs.map(function(_, i) {
+      return '<span class="gallery-dot' + (i === 0 ? ' active' : '') + '" data-idx="' + i + '"></span>';
+    }).join('');
 
-  return `
-    <div class="gallery-wrap">
-      <div class="gallery-main" id="gallery-main">
-        <img id="gallery-active-img" src="${escHtml(imgs[0])}" alt="${escHtml(p.name)}">
-        ${arrows}
-      </div>
-      ${thumbs}
-    </div>`;
+    arrows =
+      '<button class="gallery-arrow gallery-prev" data-dir="-1">&#8249;</button>' +
+      '<button class="gallery-arrow gallery-next" data-dir="1">&#8250;</button>' +
+      '<div class="gallery-dots" id="gallery-dots">' + dots + '</div>';
+
+    const thumbItems = imgs.map(function(url, i) {
+      return '<img src="' + escHtml(url) + '" alt="" class="gallery-thumb' + (i === 0 ? ' active' : '') + '" data-idx="' + i + '">';
+    }).join('');
+
+    thumbs = '<div class="gallery-thumbs">' + thumbItems + '</div>';
+  }
+
+  return (
+    '<div class="gallery-wrap">' +
+      '<div class="gallery-main" id="gallery-main">' +
+        '<img id="gallery-active-img" src="' + escHtml(imgs[0]) + '" alt="' + escHtml(p.name) + '">' +
+        arrows +
+      '</div>' +
+      thumbs +
+    '</div>'
+  );
 }
 
 function bindGalleryEvents(imgs) {
