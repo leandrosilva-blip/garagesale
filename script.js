@@ -377,42 +377,7 @@ function imgSVG() {
 /* ══════════════════════════════════════
    GALERIA
 ══════════════════════════════════════ */
-function buildGallery(p) {
-  const imgs = p.images || [];
-  if (!imgs.length) return '';
-
-  // Monta cada parte separadamente com concatenação — evita caracteres estranhos
-  // que surgem de template literals ternários aninhados
-  let arrows = '';
-  let thumbs = '';
-
-  if (imgs.length > 1) {
-    const dots = imgs.map(function(_, i) {
-      return '<span class="gallery-dot' + (i === 0 ? ' active' : '') + '" data-idx="' + i + '"></span>';
-    }).join('');
-
-    arrows =
-      '<button class="gallery-arrow gallery-prev" data-dir="-1">&#8249;</button>' +
-      '<button class="gallery-arrow gallery-next" data-dir="1">&#8250;</button>' +
-      '<div class="gallery-dots" id="gallery-dots">' + dots + '</div>';
-
-    const thumbItems = imgs.map(function(url, i) {
-      return '<img src="' + escHtml(url) + '" alt="" class="gallery-thumb' + (i === 0 ? ' active' : '') + '" data-idx="' + i + '">';
-    }).join('');
-
-    thumbs = '<div class="gallery-thumbs">' + thumbItems + '</div>';
-  }
-
-  return (
-    '<div class="gallery-wrap">' +
-      '<div class="gallery-main" id="gallery-main">' +
-        '<img id="gallery-active-img" src="' + escHtml(imgs[0]) + '" alt="' + escHtml(p.name) + '">' +
-        arrows +
-      '</div>' +
-      thumbs +
-    '</div>'
-  );
-}
+// buildGallery removido — galeria montada via DOM em openModal
 
 function bindGalleryEvents(imgs) {
   document.querySelectorAll('.gallery-arrow').forEach(btn => {
@@ -512,146 +477,203 @@ async function openModal(id) {
 
   const backdrop = document.getElementById('modal-backdrop');
   const content  = document.getElementById('modal-content');
-  const gallery  = buildGallery(p);
+  const imgs     = p.images || [];
 
-  // Loja fechada — só mostra detalhes
+  // Monta galeria via DOM — sem interpolação de strings para evitar artefatos
+  function renderGallery(container) {
+    if (!imgs.length) return;
+    const wrap = document.createElement('div');
+    wrap.className = 'gallery-wrap';
+
+    const main = document.createElement('div');
+    main.className = 'gallery-main';
+    main.id = 'gallery-main';
+
+    const img = document.createElement('img');
+    img.id  = 'gallery-active-img';
+    img.src = imgs[0];
+    img.alt = p.name;
+    main.appendChild(img);
+
+    if (imgs.length > 1) {
+      const prev = document.createElement('button');
+      prev.className = 'gallery-arrow gallery-prev';
+      prev.dataset.dir = '-1';
+      prev.innerHTML = '&#8249;';
+      main.appendChild(prev);
+
+      const next = document.createElement('button');
+      next.className = 'gallery-arrow gallery-next';
+      next.dataset.dir = '1';
+      next.innerHTML = '&#8250;';
+      main.appendChild(next);
+
+      const dots = document.createElement('div');
+      dots.className = 'gallery-dots';
+      dots.id = 'gallery-dots';
+      imgs.forEach(function(_, i) {
+        const dot = document.createElement('span');
+        dot.className = 'gallery-dot' + (i === 0 ? ' active' : '');
+        dot.dataset.idx = i;
+        dots.appendChild(dot);
+      });
+      main.appendChild(dots);
+    }
+
+    wrap.appendChild(main);
+
+    if (imgs.length > 1) {
+      const thumbsDiv = document.createElement('div');
+      thumbsDiv.className = 'gallery-thumbs';
+      imgs.forEach(function(url, i) {
+        const th = document.createElement('img');
+        th.src = url;
+        th.alt = '';
+        th.className = 'gallery-thumb' + (i === 0 ? ' active' : '');
+        th.dataset.idx = i;
+        thumbsDiv.appendChild(th);
+      });
+      wrap.appendChild(thumbsDiv);
+    }
+
+    container.insertBefore(wrap, container.firstChild);
+  }
+
+  // Loja fechada
   if (!storeOpen) {
-    content.innerHTML = `
-      ${gallery}
-      <div class="modal-body">
-        <p class="modal-category">${escHtml(p.category || '')}</p>
-        <p class="modal-title">${escHtml(p.name)}</p>
-        <p class="modal-desc">${escHtml(p.description)}</p>
-        <p class="modal-price">R$ ${fmtM(p.price)}</p>
-        <div class="sold-notice" style="background:rgba(155,81,224,0.08);border-color:rgba(155,81,224,0.3);color:var(--purple-light)">
-          🔒 <strong>Vendas temporariamente fechadas.</strong><br>
-          Você pode visualizar os produtos, mas as compras não estão disponíveis no momento.
-        </div>
-        <div class="modal-actions">
-          <button class="btn-cancel" onclick="closeModal()">Fechar</button>
-        </div>
-      </div>`;
+    content.innerHTML = '';
+    const body = document.createElement('div');
+    body.className = 'modal-body';
+    body.innerHTML =
+      '<p class="modal-category">' + escHtml(p.category || '') + '</p>' +
+      '<p class="modal-title">'    + escHtml(p.name)            + '</p>' +
+      '<p class="modal-desc">'     + escHtml(p.description)     + '</p>' +
+      '<p class="modal-price">R$ ' + fmtM(p.price)              + '</p>' +
+      '<div class="sold-notice" style="background:rgba(155,81,224,0.08);border-color:rgba(155,81,224,0.3);color:var(--purple-light)">' +
+        '🔒 <strong>Vendas temporariamente fechadas.</strong><br>' +
+        'Você pode visualizar os produtos, mas as compras não estão disponíveis no momento.' +
+      '</div>' +
+      '<div class="modal-actions">' +
+        '<button class="btn-cancel" onclick="closeModal()">Fechar</button>' +
+      '</div>';
+    content.appendChild(body);
+    renderGallery(content);
     backdrop.classList.add('open');
     backdrop.onclick = e => { if (e.target === backdrop) closeModal(); };
-    setTimeout(() => bindGalleryEvents(p.images || []), 80);
+    setTimeout(() => bindGalleryEvents(imgs), 80);
     addSwipeToClose();
     return;
   }
 
-  // Produto já vendido
+  // Produto vendido
   if (p.sold) {
-    content.innerHTML = `
-      ${gallery}
-      <div class="modal-body">
-        <p class="modal-category">${escHtml(p.category || '')}</p>
-        <p class="modal-title">${escHtml(p.name)}</p>
-        <div class="sold-notice">
-          <strong>Este item já foi adquirido por outro colaborador.</strong><br>
-          Entre em contato com garagesale@golfleet.com.br
-        </div>
-        <div class="modal-actions">
-          <button class="btn-cancel" onclick="closeModal()">Fechar</button>
-        </div>
-      </div>`;
+    content.innerHTML = '';
+    const body = document.createElement('div');
+    body.className = 'modal-body';
+    body.innerHTML =
+      '<p class="modal-category">' + escHtml(p.category || '') + '</p>' +
+      '<p class="modal-title">'    + escHtml(p.name)            + '</p>' +
+      '<div class="sold-notice">' +
+        '<strong>Este item já foi adquirido por outro colaborador.</strong><br>' +
+        'Entre em contato com garagesale@golfleet.com.br' +
+      '</div>' +
+      '<div class="modal-actions">' +
+        '<button class="btn-cancel" onclick="closeModal()">Fechar</button>' +
+      '</div>';
+    content.appendChild(body);
+    renderGallery(content);
     backdrop.classList.add('open');
     backdrop.onclick = e => { if (e.target === backdrop) closeModal(); };
-    setTimeout(() => bindGalleryEvents(p.images || []), 80);
+    setTimeout(() => bindGalleryEvents(imgs), 80);
     addSwipeToClose();
     return;
   }
 
-  // Verificar reserva de outra sessão
+  // Verifica reserva de outra sessão
   const now = new Date().toISOString();
   const { data: resData } = await supabase
-    .from('reservations')
-    .select('session_id')
-    .eq('product_id', id)
-    .gt('expires_at', now)
-    .neq('session_id', SESSION_ID)
-    .limit(1);
+    .from('reservations').select('session_id')
+    .eq('product_id', id).gt('expires_at', now).neq('session_id', SESSION_ID).limit(1);
   const isReservedByOther = resData && resData.length > 0;
-
   if (!isReservedByOther) createReservation(id);
 
   if (isReservedByOther) {
-    content.innerHTML = `
-      ${gallery}
-      <div class="modal-body">
-        <p class="modal-category">${escHtml(p.category || '')}</p>
-        <p class="modal-title">${escHtml(p.name)}</p>
-        <div class="sold-notice" style="background:rgba(155,81,224,0.08);border-color:rgba(155,81,224,0.3);color:var(--purple-light)">
-          <strong>Outro colaborador está finalizando a compra deste item.</strong><br>
-          Aguarde alguns minutos e tente novamente.
-        </div>
-        <div class="modal-actions">
-          <button class="btn-cancel" onclick="closeModal()">Fechar</button>
-        </div>
-      </div>`;
+    content.innerHTML = '';
+    const body = document.createElement('div');
+    body.className = 'modal-body';
+    body.innerHTML =
+      '<p class="modal-category">' + escHtml(p.category || '') + '</p>' +
+      '<p class="modal-title">'    + escHtml(p.name)            + '</p>' +
+      '<div class="sold-notice" style="background:rgba(155,81,224,0.08);border-color:rgba(155,81,224,0.3);color:var(--purple-light)">' +
+        '<strong>Outro colaborador está finalizando a compra deste item.</strong><br>' +
+        'Aguarde alguns minutos e tente novamente.' +
+      '</div>' +
+      '<div class="modal-actions">' +
+        '<button class="btn-cancel" onclick="closeModal()">Fechar</button>' +
+      '</div>';
+    content.appendChild(body);
+    renderGallery(content);
     backdrop.classList.add('open');
     backdrop.onclick = e => { if (e.target === backdrop) closeModal(); };
-    setTimeout(() => bindGalleryEvents(p.images || []), 80);
+    setTimeout(() => bindGalleryEvents(imgs), 80);
     addSwipeToClose();
     return;
   }
 
-  // Formulário normal
+  // Formulário normal de compra
   const opts = [];
   for (let i = 1; i <= Math.min(Math.floor(p.price / 100), 10); i++)
-    opts.push(`<option value="${i}">${i}x de R$ ${fmtM(p.price / i)}</option>`);
+    opts.push('<option value="' + i + '">' + i + 'x de R$ ' + fmtM(p.price / i) + '</option>');
 
-  content.innerHTML = `
-    ${gallery}
-    <div class="modal-body">
-      <p class="modal-category">${escHtml(p.category || '')}</p>
-      <p class="modal-title">${escHtml(p.name)}</p>
-      <p class="modal-desc">${escHtml(p.description)}</p>
-      <p class="modal-price">R$ ${fmtM(p.price)}</p>
-      <div class="form-section">
-        <h4>Seus dados</h4>
-        <div class="form-row" id="fr-name">
-          <label>Nome completo *</label>
-          <input type="text" id="f-name" placeholder="Seu nome">
-          <p class="error-msg">Informe seu nome.</p>
-        </div>
-        <div class="form-row" id="fr-email">
-          <label>E-mail corporativo *</label>
-          <input type="email" id="f-email" placeholder="seunome@golfleet.com.br">
-          <p class="error-msg">Informe um e-mail válido.</p>
-        </div>
-        <div class="form-row" id="fr-parcelas">
-          <label>Parcelamento *</label>
-          <select id="f-parcelas" onchange="updInst(${p.price})">${opts.join('')}</select>
-          <p class="installment-info" id="installment-info">
-            Parcela de R$ ${fmtM(p.price)} na folha
-          </p>
-        </div>
-        <div class="form-row" id="fr-entrega">
-          <label>Forma de recebimento *</label>
-          <select id="f-entrega">
-            <option value="presencial">Presencialmente (Londrina)</option>
-            <option value="correio">Enviado via transportadora</option>
-          </select>
-        </div>
-      </div>
-      <div class="modal-actions">
-        <button class="btn-cancel" onclick="closeModal()">Cancelar</button>
-        <button class="btn-primary btn-confirm" onclick="submitPurchase()">
-          Confirmar compra
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-            <path d="M5 12h14M12 5l7 7-7 7"/>
-          </svg>
-        </button>
-      </div>
-    </div>`;
+  content.innerHTML = '';
+  const body = document.createElement('div');
+  body.className = 'modal-body';
+  body.innerHTML =
+    '<p class="modal-category">' + escHtml(p.category || '') + '</p>' +
+    '<p class="modal-title">'    + escHtml(p.name)            + '</p>' +
+    '<p class="modal-desc">'     + escHtml(p.description)     + '</p>' +
+    '<p class="modal-price">R$ ' + fmtM(p.price)              + '</p>' +
+    '<div class="form-section">' +
+      '<h4>Seus dados</h4>' +
+      '<div class="form-row" id="fr-name">' +
+        '<label>Nome completo *</label>' +
+        '<input type="text" id="f-name" placeholder="Seu nome">' +
+        '<p class="error-msg">Informe seu nome.</p>' +
+      '</div>' +
+      '<div class="form-row" id="fr-email">' +
+        '<label>E-mail corporativo *</label>' +
+        '<input type="email" id="f-email" placeholder="seunome@golfleet.com.br">' +
+        '<p class="error-msg">Informe um e-mail válido.</p>' +
+      '</div>' +
+      '<div class="form-row" id="fr-parcelas">' +
+        '<label>Parcelamento *</label>' +
+        '<select id="f-parcelas" onchange="updInst(' + p.price + ')">' + opts.join('') + '</select>' +
+        '<p class="installment-info" id="installment-info">Parcela de R$ ' + fmtM(p.price) + ' na folha</p>' +
+      '</div>' +
+      '<div class="form-row" id="fr-entrega">' +
+        '<label>Forma de recebimento *</label>' +
+        '<select id="f-entrega">' +
+          '<option value="presencial">Presencialmente (Londrina)</option>' +
+          '<option value="correio">Enviado via transportadora</option>' +
+        '</select>' +
+      '</div>' +
+    '</div>' +
+    '<div class="modal-actions">' +
+      '<button class="btn-cancel" onclick="closeModal()">Cancelar</button>' +
+      '<button class="btn-primary btn-confirm" onclick="submitPurchase()">' +
+        'Confirmar compra' +
+        '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 12h14M12 5l7 7-7 7"/></svg>' +
+      '</button>' +
+    '</div>';
 
+  content.appendChild(body);
+  renderGallery(content);
   backdrop.classList.add('open');
   backdrop.onclick = e => { if (e.target === backdrop) closeModal(); };
-  setTimeout(() => {
-    updInst(p.price);
-    bindGalleryEvents(p.images || []);
-  }, 80);
+  setTimeout(() => { updInst(p.price); bindGalleryEvents(imgs); }, 80);
   addSwipeToClose();
 }
+
 
 function addSwipeToClose() {
   setTimeout(() => {
