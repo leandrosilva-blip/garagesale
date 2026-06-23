@@ -306,8 +306,8 @@ function renderCatalog() {
     return;
   }
 
-  const grouped   = {};
-  const ordCats   = activeFilter === null ? allCategories : allCategories.filter(c => c.id === activeFilter);
+  const grouped = {};
+  const ordCats = activeFilter === null ? allCategories : allCategories.filter(c => c.id === activeFilter);
   ordCats.forEach(c => { grouped[c.id] = { name: c.name, items: [] }; });
   filtered.forEach(p => {
     if (!grouped[p.category_id]) grouped[p.category_id] = { name: p.category || 'Sem categoria', items: [] };
@@ -315,53 +315,180 @@ function renderCatalog() {
   });
 
   let hasAny = false;
-  Object.values(grouped).forEach(({ name, items }) => {
-    if (!items.length) return;
+  Object.values(grouped).forEach(function(group) {
+    if (!group.items.length) return;
     hasAny = true;
 
+    // Título da categoria
     const sec = document.createElement('div');
     sec.className = 'category-section';
-    sec.innerHTML = `<p class="category-title">${escHtml(name)}</p>`;
+    const title = document.createElement('p');
+    title.className = 'category-title';
+    title.textContent = group.name;
+    sec.appendChild(title);
     area.appendChild(sec);
 
     const row = document.createElement('div');
     row.className = 'products-row';
     area.appendChild(row);
 
-    items.forEach(p => {
+    group.items.forEach(function(p) {
       const card = document.createElement('div');
       card.className = 'product-card' + (p.sold ? ' sold' : '');
 
-      const imgHtml = p.images && p.images.length > 0
-        ? `<div class="product-img"><img src="${escHtml(p.images[0])}" alt="${escHtml(p.name)}"
-               onerror="this.parentElement.outerHTML='<div class=product-img-placeholder>${imgSVG()}</div>'"></div>`
-        : `<div class="product-img-placeholder">${imgSVG()}</div>`;
+      // ── Imagem com mini-carrossel ──
+      const imgWrap = document.createElement('div');
+      imgWrap.style.position = 'relative';
 
-      const soldOv = p.sold
-        ? `<div class="sold-overlay"><div class="sold-badge">Vendido</div></div>` : '';
-      const resOv = (!p.sold && p.reserved)
-        ? `<div class="sold-overlay" style="background:rgba(155,81,224,0.6)"><div class="sold-badge" style="background:var(--purple)">Reservado</div></div>` : '';
+      const imgs = p.images || [];
+      let cardImgIndex = 0;
 
-      let action = '';
-      if (p.sold)          action = '<span style="font-size:12px;color:var(--danger)">Indisponível</span>';
-      else if (p.reserved) action = '<span style="font-size:12px;color:var(--purple-light)">Em negociação</span>';
-      else if (!storeOpen) action = '<span style="font-size:11px;color:var(--muted);border:1px solid var(--border);padding:0.4rem 0.8rem;border-radius:6px;">Vendas fechadas</span>';
-      else                 action = `<button class="btn-buy" onclick="openModal(${p.id})">Comprar</button>`;
+      if (imgs.length > 0) {
+        const imgDiv = document.createElement('div');
+        imgDiv.className = 'product-img';
 
-      card.innerHTML = `
-        <div style="position:relative">${imgHtml}${soldOv}${resOv}</div>
-        <div class="product-info">
-          <p class="product-category">${escHtml(p.category || '')}</p>
-          <p class="product-name">${escHtml(p.name)}</p>
-          <p class="product-desc">${escHtml(p.description)}</p>
-          <div class="product-footer">
-            <span class="product-price">R$ ${fmtM(p.price)}</span>
-            ${action}
-          </div>
-        </div>`;
+        const img = document.createElement('img');
+        img.src = imgs[0];
+        img.alt = p.name;
+        img.style.transition = 'opacity 0.12s';
+        img.onerror = function() {
+          const ph = document.createElement('div');
+          ph.className = 'product-img-placeholder';
+          const svgEl = makePlaceholderSVG();
+          ph.appendChild(svgEl);
+          imgDiv.parentNode.replaceChild(ph, imgDiv);
+        };
+        imgDiv.appendChild(img);
 
-      if (!p.sold && !p.reserved && storeOpen)
-        card.addEventListener('click', e => { if (!e.target.classList.contains('btn-buy')) openModal(p.id); });
+        // Setas no card (aparecem se tiver mais de 1 imagem)
+        if (imgs.length > 1) {
+          const btnPrev = document.createElement('button');
+          btnPrev.innerHTML = '&#8249;';
+          btnPrev.style.cssText = 'position:absolute;left:4px;top:50%;transform:translateY(-50%);' +
+            'background:rgba(0,0,0,0.45);border:none;color:white;width:28px;height:28px;' +
+            'border-radius:50%;font-size:1.2rem;cursor:pointer;z-index:5;display:flex;' +
+            'align-items:center;justify-content:center;line-height:1;';
+
+          const btnNext = document.createElement('button');
+          btnNext.innerHTML = '&#8250;';
+          btnNext.style.cssText = 'position:absolute;right:4px;top:50%;transform:translateY(-50%);' +
+            'background:rgba(0,0,0,0.45);border:none;color:white;width:28px;height:28px;' +
+            'border-radius:50%;font-size:1.2rem;cursor:pointer;z-index:5;display:flex;' +
+            'align-items:center;justify-content:center;line-height:1;';
+
+          const dotsDiv = document.createElement('div');
+          dotsDiv.style.cssText = 'position:absolute;bottom:6px;left:50%;transform:translateX(-50%);' +
+            'display:flex;gap:4px;z-index:5;';
+          imgs.forEach(function(_, di) {
+            const dot = document.createElement('span');
+            dot.style.cssText = 'width:6px;height:6px;border-radius:50%;background:' +
+              (di === 0 ? 'var(--purple)' : 'rgba(255,255,255,0.45)') + ';transition:background 0.2s;';
+            dotsDiv.appendChild(dot);
+          });
+
+          function updateCardImg() {
+            img.style.opacity = '0';
+            setTimeout(function() { img.src = imgs[cardImgIndex]; img.style.opacity = '1'; }, 120);
+            dotsDiv.querySelectorAll('span').forEach(function(dot, di) {
+              dot.style.background = di === cardImgIndex ? 'var(--purple)' : 'rgba(255,255,255,0.45)';
+            });
+          }
+
+          btnPrev.addEventListener('click', function(e) {
+            e.stopPropagation();
+            cardImgIndex = (cardImgIndex - 1 + imgs.length) % imgs.length;
+            updateCardImg();
+          });
+          btnNext.addEventListener('click', function(e) {
+            e.stopPropagation();
+            cardImgIndex = (cardImgIndex + 1) % imgs.length;
+            updateCardImg();
+          });
+
+          // Swipe no card
+          let cTx = 0;
+          imgDiv.addEventListener('touchstart', function(e) { cTx = e.touches[0].clientX; }, { passive: true });
+          imgDiv.addEventListener('touchend', function(e) {
+            const dx = e.changedTouches[0].clientX - cTx;
+            if (Math.abs(dx) > 35) {
+              cardImgIndex = (cardImgIndex + (dx < 0 ? 1 : -1) + imgs.length) % imgs.length;
+              updateCardImg();
+            }
+          }, { passive: true });
+
+          imgWrap.appendChild(btnPrev);
+          imgWrap.appendChild(btnNext);
+          imgWrap.appendChild(dotsDiv);
+        }
+
+        imgWrap.appendChild(imgDiv);
+      } else {
+        const ph = document.createElement('div');
+        ph.className = 'product-img-placeholder';
+        ph.appendChild(makePlaceholderSVG());
+        imgWrap.appendChild(ph);
+      }
+
+      // Overlays de status
+      if (p.sold) {
+        const ov = document.createElement('div');
+        ov.className = 'sold-overlay';
+        ov.innerHTML = '<div class="sold-badge">Vendido</div>';
+        imgWrap.appendChild(ov);
+      } else if (p.reserved) {
+        const ov = document.createElement('div');
+        ov.className = 'sold-overlay';
+        ov.style.background = 'rgba(155,81,224,0.6)';
+        ov.innerHTML = '<div class="sold-badge" style="background:var(--purple)">Reservado</div>';
+        imgWrap.appendChild(ov);
+      }
+
+      card.appendChild(imgWrap);
+
+      // ── Info do produto ──
+      const info = document.createElement('div');
+      info.className = 'product-info';
+
+      const cat  = document.createElement('p'); cat.className  = 'product-category'; cat.textContent = p.category || '';
+      const name = document.createElement('p'); name.className = 'product-name';     name.textContent = p.name;
+      const desc = document.createElement('p'); desc.className = 'product-desc';     desc.textContent = p.description;
+
+      const footer = document.createElement('div');
+      footer.className = 'product-footer';
+
+      const price = document.createElement('span');
+      price.className = 'product-price';
+      price.textContent = 'R$ ' + fmtM(p.price);
+
+      const actionEl = document.createElement(p.sold || p.reserved || !storeOpen ? 'span' : 'button');
+      if (!p.sold && !p.reserved && storeOpen) {
+        actionEl.className = 'btn-buy';
+        actionEl.textContent = 'Comprar';
+        actionEl.addEventListener('click', function(e) { e.stopPropagation(); openModal(p.id); });
+      } else if (p.sold) {
+        actionEl.style.cssText = 'font-size:12px;color:var(--danger)';
+        actionEl.textContent = 'Indisponível';
+      } else if (p.reserved) {
+        actionEl.style.cssText = 'font-size:12px;color:var(--purple-light)';
+        actionEl.textContent = 'Em negociação';
+      } else {
+        actionEl.style.cssText = 'font-size:11px;color:var(--muted);border:1px solid var(--border);padding:0.4rem 0.8rem;border-radius:6px;';
+        actionEl.textContent = 'Vendas fechadas';
+      }
+
+      footer.appendChild(price);
+      footer.appendChild(actionEl);
+      info.appendChild(cat);
+      info.appendChild(name);
+      info.appendChild(desc);
+      info.appendChild(footer);
+      card.appendChild(info);
+
+      // Clique no card abre modal (loja aberta e disponível)
+      if (!p.sold && !p.reserved && storeOpen) {
+        card.style.cursor = 'pointer';
+        card.addEventListener('click', function() { openModal(p.id); });
+      }
 
       row.appendChild(card);
     });
@@ -371,7 +498,23 @@ function renderCatalog() {
 }
 
 function imgSVG() {
-  return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg>`;
+  return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg>';
+}
+
+// Returns actual SVG DOM element — safe to use with appendChild
+function makePlaceholderSVG() {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('fill', 'none');
+  svg.setAttribute('stroke', 'currentColor');
+  svg.setAttribute('stroke-width', '1.5');
+  svg.style.width  = '36px';
+  svg.style.height = '36px';
+  svg.innerHTML =
+    '<rect x="3" y="3" width="18" height="18" rx="2"/>' +
+    '<circle cx="8.5" cy="8.5" r="1.5"/>' +
+    '<path d="m21 15-5-5L5 21"/>';
+  return svg;
 }
 
 /* ══════════════════════════════════════
