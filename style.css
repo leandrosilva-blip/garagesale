@@ -228,11 +228,12 @@ header {
 }
 
 .terms-title {
-  font-size: clamp(2.2rem, 4vw, 3.4rem);  /* maior no desktop */
+  font-size: clamp(2.2rem, 4vw, 3.4rem);
   font-weight: 800;
   line-height: 1.1;
   color: var(--white);
   margin-bottom: 2.5rem;
+  white-space: nowrap; /* desktop: tudo em uma linha */
 }
 
 .terms-section {
@@ -922,6 +923,7 @@ header {
   /* Terms — letras menores no mobile */
   .terms-wrap { padding: 1.5rem 1.1rem 5rem; max-width: 100%; }
   .terms-eyebrow { font-size: 10px; }
+  .terms-title { white-space: normal; font-size: clamp(1.4rem,5.5vw,1.9rem); }
   .terms-title { font-size: clamp(1.4rem, 6vw, 1.9rem); }
   .terms-section { padding: 1rem 1.1rem; }
   .terms-section p { font-size: 13px; line-height: 1.7; }
