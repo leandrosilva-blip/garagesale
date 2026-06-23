@@ -5,9 +5,10 @@
 
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm';
 
+// Credenciais carregadas de config.js (não versionado no Git)
 const supabase = createClient(
-  'https://mupajexrxmsvyadjvrht.supabase.co',
-  'sb_publishable_N4bOCHs1zbd4rPqqEy0hUw_kQpNET98'
+  window.SUPABASE_URL,
+  window.SUPABASE_KEY
 );
 
 /* ══════════════════════════════════════
@@ -32,12 +33,12 @@ const SESSION_ID = 'sess_' + Math.random().toString(36).slice(2) + '_' + Date.no
   try {
     const tenAgo = new Date(Date.now() - 10 * 60 * 1000).toISOString();
     await fetch(
-      'https://mupajexrxmsvyadjvrht.supabase.co/rest/v1/reservations?created_at=lt.' + encodeURIComponent(tenAgo),
+      window.SUPABASE_URL + '/rest/v1/reservations?created_at=lt.' + encodeURIComponent(tenAgo),
       {
         method: 'DELETE',
         headers: {
-          'apikey':        'sb_publishable_N4bOCHs1zbd4rPqqEy0hUw_kQpNET98',
-          'Authorization': 'Bearer sb_publishable_N4bOCHs1zbd4rPqqEy0hUw_kQpNET98',
+          'apikey':        window.SUPABASE_KEY,
+          'Authorization': 'Bearer ' + window.SUPABASE_KEY,
           'Content-Type':  'application/json',
           'Prefer':        'return=minimal'
         }
@@ -49,13 +50,13 @@ const SESSION_ID = 'sess_' + Math.random().toString(36).slice(2) + '_' + Date.no
 // Ao fechar/recarregar: remove reserva desta sessão
 window.addEventListener('beforeunload', () => {
   fetch(
-    'https://mupajexrxmsvyadjvrht.supabase.co/rest/v1/reservations?session_id=eq.' + SESSION_ID,
+    window.SUPABASE_URL + '/rest/v1/reservations?session_id=eq.' + SESSION_ID,
     {
       method:    'DELETE',
       keepalive: true,
       headers: {
-        'apikey':        'sb_publishable_N4bOCHs1zbd4rPqqEy0hUw_kQpNET98',
-        'Authorization': 'Bearer sb_publishable_N4bOCHs1zbd4rPqqEy0hUw_kQpNET98',
+        'apikey':        window.SUPABASE_KEY,
+        'Authorization': 'Bearer ' + window.SUPABASE_KEY,
         'Content-Type':  'application/json'
       }
     }
