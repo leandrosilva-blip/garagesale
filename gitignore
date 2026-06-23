@@ -1,0 +1,6 @@
+# Credenciais — nunca enviar ao GitHub
+config.js
+
+# Arquivos de sistema
+.DS_Store
+Thumbs.db
