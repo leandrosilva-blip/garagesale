@@ -18,6 +18,7 @@
   --border:   #2a2a42;
   --mid:      #3a3a58;
   --muted:    #6a6a9a;
+  --desc:     #c9c5ee;   /* descrição dos produtos — mais clara (item 12) */
   --text:     #e2dfff;
   --white:    #f2f0ff;
   --card-bg:  #131320;
@@ -34,6 +35,7 @@
   --border:   #d0c8f0;
   --mid:      #b0a8d8;
   --muted:    #6a5a9a;
+  --desc:     #2e2748;   /* descrição dos produtos — mais legível (item 12) */
   --text:     #1a1530;
   --white:    #1a1530;
   --card-bg:  #ffffff;
@@ -490,7 +492,13 @@ header {
   transform: translateY(-3px);
   box-shadow: 0 8px 32px rgba(155,81,224,0.15);
 }
-.product-card.sold { opacity: 0.5; cursor: default; }
+.product-card.sold { opacity: 0.5; }
+.product-stock {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--purple-light);
+  margin: -0.35rem 0 0.8rem;
+}
 
 .product-img {
   width: 100%;
@@ -553,13 +561,14 @@ header {
   line-height: 1.3;
 }
 .product-desc {
-  font-size: 12px;
-  color: var(--muted);
+  font-size: 14px;
+  color: var(--desc);
   margin-bottom: 0.9rem;
   line-height: 1.6;
+  white-space: pre-line;   /* respeita as quebras de linha do admin (item 9) */
   display: -webkit-box;
-  -webkit-line-clamp: 3;
-  line-clamp: 3;
+  -webkit-line-clamp: 4;
+  line-clamp: 4;
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
@@ -620,7 +629,8 @@ header {
 .modal-body { padding: 1.75rem; }
 .modal-category { font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--purple-light); margin-bottom: 0.3rem; }
 .modal-title { font-size: 1.5rem; font-weight: 800; color: var(--white); margin-bottom: 0.7rem; }
-.modal-desc { font-size: 14px; color: var(--muted); line-height: 1.8; margin-bottom: 1.25rem; }
+.modal-desc { font-size: 16px; color: var(--desc); line-height: 1.75; margin-bottom: 1.25rem; white-space: pre-line; }
+.modal-stock { font-size: 13px; font-weight: 500; color: var(--purple-light); margin: -0.5rem 0 1rem; }
 .modal-price { font-family: 'Syne', sans-serif; font-weight: 800; font-size: 1.8rem; color: var(--purple-light); margin-bottom: 1.5rem; }
 
 /* Form inside modal */
