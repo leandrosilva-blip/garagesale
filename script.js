@@ -24,6 +24,9 @@ let storeOpen        = false;
 let galleryIndex     = 0;
 let pollingInterval  = null;
 let realtimeChannel  = null;
+let lastCatalogSig   = '';          // evita redesenhar o catálogo se nada mudou (item 10)
+const cardImgState   = {};          // foto atual de cada card no catálogo (item 10)
+const openProductCards = new Set(); // cards do admin abertos — mantidos após salvar
 
 // SESSION_ID único por carregamento — muda a cada refresh
 const SESSION_ID = 'sess_' + Math.random().toString(36).slice(2) + '_' + Date.now();
@@ -107,6 +110,7 @@ async function goToCatalog() {
 
   showPage('page-catalog');
   activeFilter = null;
+  lastCatalogSig = '';
   await Promise.all([loadCategories(), loadProducts()]);
   startRealtime();
 }
@@ -120,18 +124,7 @@ function startRealtime() {
   realtimeChannel = supabase
     .channel('catalog-' + Date.now())
     .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'products' },
-      async (payload) => {
-        if (payload.new) {
-          const idx = allProducts.findIndex(p => p.id === payload.new.id);
-          if (idx !== -1) {
-            allProducts[idx].sold    = payload.new.sold;
-            allProducts[idx].sold_at = payload.new.sold_at;
-          }
-        }
-        renderCatalog();
-        updateHeaderStatus();
-        await loadProducts();
-      }
+      async () => { await loadProducts(); }
     )
     .on('postgres_changes', { event: '*', schema: 'public', table: 'reservations' },
       async () => { await loadProducts(); }
@@ -165,6 +158,7 @@ async function loadProducts() {
   const [prodRes, resRes] = await Promise.all([
     supabase.from('products')
       .select('*, categories(id,name), product_images(id,url,sort_order)')
+      .order('sort_order', { ascending: true })
       .order('created_at'),
     supabase.from('reservations')
       .select('product_id, session_id').gt('expires_at', now)
@@ -175,27 +169,62 @@ async function loadProducts() {
     return;
   }
 
-  const reservedMap = {};
-  (resRes.data || []).forEach(r => { reservedMap[r.product_id] = r.session_id; });
+  // Conta reservas ativas de OUTRAS sessões por produto (item 15)
+  const othersRes = {};
+  const mineRes   = {};
+  (resRes.data || []).forEach(r => {
+    if (r.session_id === SESSION_ID) mineRes[r.product_id] = true;
+    else othersRes[r.product_id] = (othersRes[r.product_id] || 0) + 1;
+  });
 
-  allProducts = (prodRes.data || []).map(p => ({
-    ...p,
-    category:     p.categories?.name || '',
-    category_id:  p.category_id,
-    images:       (p.product_images || [])
-                    .sort((a,b) => a.sort_order - b.sort_order)
-                    .map(i => i.url),
-    reserved:     !!(reservedMap[p.id] && reservedMap[p.id] !== SESSION_ID),
-    reservedByMe: reservedMap[p.id] === SESSION_ID
-  }));
+  allProducts = (prodRes.data || []).map(p => {
+    const s = stockOf(p);
+    return {
+      ...p,
+      category:     p.categories?.name || '',
+      category_id:  p.category_id,
+      images:       sortImages(p.product_images).map(i => i.url),
+      quantity:     s.quantity,
+      sold_count:   s.soldCount,
+      remaining:    s.remaining,
+      sold:         s.soldOut,
+      // "Reservado" só quando TODAS as unidades restantes estão em negociação
+      reserved:     !s.soldOut && (othersRes[p.id] || 0) >= s.remaining,
+      reservedByMe: !!mineRes[p.id]
+    };
+  });
 
-  // Só atualiza o catálogo se estiver nessa página
+  // Só atualiza o catálogo se estiver nessa página e se algo mudou
+  // (antes o polling de 3s redesenhava tudo e as fotos voltavam para a primeira)
   const catalogPage = document.getElementById('page-catalog');
   if (catalogPage && catalogPage.classList.contains('active')) {
-    renderCatalog();
+    const sig = catalogSignature();
+    if (sig !== lastCatalogSig) {
+      lastCatalogSig = sig;
+      renderCatalog();
+      updateStoreBanner();
+    }
     updateHeaderStatus();
-    updateStoreBanner();
   }
+}
+
+// Estoque calculado a partir de quantity / sold_count (item 15)
+function stockOf(p) {
+  const quantity  = Math.max(parseInt(p.quantity) || 1, 1);
+  const soldCount = Math.max(parseInt(p.sold_count) || 0, 0);
+  const remaining = Math.max(quantity - soldCount, 0);
+  return { quantity, soldCount, remaining, soldOut: !!p.sold || remaining <= 0 };
+}
+
+function sortImages(list) {
+  return (list || []).slice().sort((a,b) => (a.sort_order - b.sort_order) || (a.id - b.id));
+}
+
+function catalogSignature() {
+  return JSON.stringify([storeOpen, allProducts.map(p => [
+    p.id, p.name, p.price, p.description, p.category_id, p.sold, p.reserved,
+    p.remaining, p.quantity, p.sort_order, p.images
+  ])]);
 }
 
 // Versão leve para o admin — sem tocar na UI do catálogo
@@ -203,17 +232,20 @@ async function reloadAdminProducts() {
   const { data } = await supabase
     .from('products')
     .select('*, categories(id,name), product_images(id,url,sort_order)')
+    .order('sort_order', { ascending: true })
     .order('created_at');
   if (data) {
-    allProducts = data.map(p => ({
-      ...p,
-      category:    p.categories?.name || '',
-      category_id: p.category_id,
-      images:      (p.product_images || [])
-                     .sort((a,b) => a.sort_order - b.sort_order)
-                     .map(i => i.url),
-      reserved: false, reservedByMe: false
-    }));
+    allProducts = data.map(p => {
+      const s = stockOf(p);
+      return {
+        ...p,
+        category:    p.categories?.name || '',
+        category_id: p.category_id,
+        images:      sortImages(p.product_images).map(i => i.url),
+        quantity: s.quantity, sold_count: s.soldCount, remaining: s.remaining, sold: s.soldOut,
+        reserved: false, reservedByMe: false
+      };
+    });
   }
 }
 
@@ -342,14 +374,14 @@ function renderCatalog() {
       imgWrap.style.position = 'relative';
 
       const imgs = p.images || [];
-      let cardImgIndex = 0;
+      let cardImgIndex = Math.min(cardImgState[p.id] || 0, Math.max(imgs.length - 1, 0));
 
       if (imgs.length > 0) {
         const imgDiv = document.createElement('div');
         imgDiv.className = 'product-img';
 
         const img = document.createElement('img');
-        img.src = imgs[0];
+        img.src = imgs[cardImgIndex];
         img.alt = p.name;
         img.style.transition = 'opacity 0.12s';
         img.onerror = function() {
@@ -383,11 +415,12 @@ function renderCatalog() {
           imgs.forEach(function(_, di) {
             const dot = document.createElement('span');
             dot.style.cssText = 'width:6px;height:6px;border-radius:50%;background:' +
-              (di === 0 ? 'var(--purple)' : 'rgba(255,255,255,0.45)') + ';transition:background 0.2s;';
+              (di === cardImgIndex ? 'var(--purple)' : 'rgba(255,255,255,0.45)') + ';transition:background 0.2s;';
             dotsDiv.appendChild(dot);
           });
 
           function updateCardImg() {
+            cardImgState[p.id] = cardImgIndex;
             img.style.opacity = '0';
             setTimeout(function() { img.src = imgs[cardImgIndex]; img.style.opacity = '1'; }, 120);
             dotsDiv.querySelectorAll('span').forEach(function(dot, di) {
@@ -434,7 +467,7 @@ function renderCatalog() {
       if (p.sold) {
         const ov = document.createElement('div');
         ov.className = 'sold-overlay';
-        ov.innerHTML = '<div class="sold-badge">Vendido</div>';
+        ov.innerHTML = '<div class="sold-badge">' + (p.quantity > 1 ? 'Esgotado' : 'Vendido') + '</div>';
         imgWrap.appendChild(ov);
       } else if (p.reserved) {
         const ov = document.createElement('div');
@@ -482,20 +515,30 @@ function renderCatalog() {
       info.appendChild(cat);
       info.appendChild(name);
       info.appendChild(desc);
+      // Unidades disponíveis (apenas anúncios com mais de 1 unidade)
+      if (p.quantity > 1 && !p.sold) {
+        const stock = document.createElement('p');
+        stock.className = 'product-stock';
+        stock.textContent = stockLabel(p);
+        info.appendChild(stock);
+      }
       info.appendChild(footer);
       card.appendChild(info);
 
-      // Clique no card abre modal (loja aberta e disponível)
-      if (!p.sold && !p.reserved && storeOpen) {
-        card.style.cursor = 'pointer';
-        card.addEventListener('click', function() { openModal(p.id); });
-      }
+      // Clique no card sempre abre o anúncio (com a loja fechada abre só para visualizar — item 8)
+      card.style.cursor = 'pointer';
+      card.addEventListener('click', function() { openModal(p.id); });
 
       row.appendChild(card);
     });
   });
 
   if (!hasAny) area.innerHTML = '<p class="empty-state">Nenhum produto cadastrado ainda.</p>';
+}
+
+function stockLabel(p) {
+  return p.remaining + ' de ' + p.quantity + ' unidade' + (p.quantity !== 1 ? 's' : '') +
+         ' disponíve' + (p.remaining !== 1 ? 'is' : 'l');
 }
 
 function imgSVG() {
@@ -622,6 +665,8 @@ async function openModal(id) {
   const backdrop = document.getElementById('modal-backdrop');
   const content  = document.getElementById('modal-content');
   const imgs     = p.images || [];
+  const stockHtml = (p.quantity > 1 && !p.sold)
+    ? '<p class="modal-stock">' + escHtml(stockLabel(p)) + '</p>' : '';
 
   // Monta galeria via DOM — sem interpolação de strings para evitar artefatos
   function renderGallery(container) {
@@ -692,6 +737,7 @@ async function openModal(id) {
       '<p class="modal-category">' + escHtml(p.category || '') + '</p>' +
       '<p class="modal-title">'    + escHtml(p.name)            + '</p>' +
       '<p class="modal-desc">'     + escHtml(p.description)     + '</p>' +
+      stockHtml +
       '<p class="modal-price">R$ ' + fmtM(p.price)              + '</p>' +
       '<div class="sold-notice" style="background:rgba(155,81,224,0.08);border-color:rgba(155,81,224,0.3);color:var(--purple-light)">' +
         '🔒 <strong>Vendas temporariamente fechadas.</strong><br>' +
@@ -718,7 +764,9 @@ async function openModal(id) {
       '<p class="modal-category">' + escHtml(p.category || '') + '</p>' +
       '<p class="modal-title">'    + escHtml(p.name)            + '</p>' +
       '<div class="sold-notice">' +
-        '<strong>Este item já foi adquirido por outro colaborador.</strong><br>' +
+        (p.quantity > 1
+          ? '<strong>Todas as unidades deste item já foram adquiridas.</strong><br>'
+          : '<strong>Este item já foi adquirido por outro colaborador.</strong><br>') +
         'Entre em contato com garagesale@golfleet.com.br' +
       '</div>' +
       '<div class="modal-actions">' +
@@ -733,12 +781,12 @@ async function openModal(id) {
     return;
   }
 
-  // Verifica reserva de outra sessão
+  // Verifica reservas de outras sessões — só bloqueia se todas as unidades restantes estiverem em negociação
   const now = new Date().toISOString();
   const { data: resData } = await supabase
     .from('reservations').select('session_id')
-    .eq('product_id', id).gt('expires_at', now).neq('session_id', SESSION_ID).limit(1);
-  const isReservedByOther = resData && resData.length > 0;
+    .eq('product_id', id).gt('expires_at', now).neq('session_id', SESSION_ID);
+  const isReservedByOther = (resData?.length || 0) >= p.remaining;
   if (!isReservedByOther) createReservation(id);
 
   if (isReservedByOther) {
@@ -776,6 +824,7 @@ async function openModal(id) {
     '<p class="modal-category">' + escHtml(p.category || '') + '</p>' +
     '<p class="modal-title">'    + escHtml(p.name)            + '</p>' +
     '<p class="modal-desc">'     + escHtml(p.description)     + '</p>' +
+    stockHtml +
     '<p class="modal-price">R$ ' + fmtM(p.price)              + '</p>' +
     '<div class="form-section">' +
       '<h4>Seus dados</h4>' +
@@ -915,33 +964,49 @@ async function submitPurchase() {
   if (btn) { btn.disabled = true; btn.textContent = 'Aguarde...'; }
 
   try {
-    // Verifica se produto ainda está disponível
-    const { data: prod } = await supabase
-      .from('products').select('id,name,price,sold').eq('id', currentProductId).single();
+    // Baixa 1 unidade do estoque com controle de concorrência:
+    // o update só acontece se sold_count ainda for o valor lido (evita vender além da quantidade)
+    let prod = null;
+    let ok   = false;
+    for (let attempt = 0; attempt < 5 && !ok; attempt++) {
+      const { data: fresh, error: readErr } = await supabase
+        .from('products').select('id,name,price,sold,quantity,sold_count').eq('id', currentProductId).single();
+      if (readErr) throw new Error(readErr.message);
+      prod = fresh;
+      const s = stockOf(prod);
 
-    if (prod.sold) {
-      if (btn) { btn.disabled = false; btn.textContent = 'Confirmar compra'; }
-      const idx = allProducts.findIndex(p => p.id === currentProductId);
-      if (idx !== -1) allProducts[idx].sold = true;
-      await removeReservation();
-      closeModal();
-      renderCatalog();
-      updateHeaderStatus();
-      alert('⚠️ Este produto foi adquirido por outro colaborador.');
-      return;
+      if (s.soldOut) {
+        if (btn) { btn.disabled = false; btn.textContent = 'Confirmar compra'; }
+        const idx = allProducts.findIndex(p => p.id === currentProductId);
+        if (idx !== -1) allProducts[idx].sold = true;
+        await removeReservation();
+        closeModal();
+        renderCatalog();
+        updateHeaderStatus();
+        alert(s.quantity > 1
+          ? '⚠️ As unidades deste produto esgotaram.'
+          : '⚠️ Este produto foi adquirido por outro colaborador.');
+        return;
+      }
+
+      const newCount = s.soldCount + 1;
+      const upd = { sold_count: newCount };
+      if (newCount >= s.quantity) { upd.sold = true; upd.sold_at = new Date().toISOString(); }
+
+      const { data: updRows, error: soldErr } = await supabase
+        .from('products')
+        .update(upd)
+        .eq('id', currentProductId)
+        .eq('sold', false)
+        .eq('sold_count', s.soldCount)
+        .select('id');
+      if (soldErr) throw new Error(soldErr.message);
+      ok = !!(updRows && updRows.length);
     }
+    if (!ok) throw new Error('Muitas compras simultâneas, tente novamente.');
 
     const n            = parseInt(parcelas.value);
     const valorParcela = (prod.price / n).toFixed(2);
-
-    // Marca como vendido
-    const { error: soldErr } = await supabase
-      .from('products')
-      .update({ sold: true, sold_at: new Date().toISOString() })
-      .eq('id', currentProductId)
-      .eq('sold', false);
-
-    if (soldErr) throw new Error(soldErr.message);
 
     // Cria o pedido
     const { error: orderErr } = await supabase.from('orders').insert({
@@ -967,7 +1032,13 @@ async function submitPurchase() {
 
     // Atualiza local imediatamente
     const idx = allProducts.findIndex(p => p.id === currentProductId);
-    if (idx !== -1) { allProducts[idx].sold = true; allProducts[idx].reserved = false; }
+    if (idx !== -1) {
+      const lp = allProducts[idx];
+      lp.sold_count = (lp.sold_count || 0) + 1;
+      lp.remaining  = Math.max(lp.quantity - lp.sold_count, 0);
+      lp.sold       = lp.remaining <= 0;
+      lp.reserved   = false;
+    }
 
     closeModal();
     renderCatalog();
@@ -1111,12 +1182,21 @@ async function renderAdminOrders() {
 }
 
 async function deleteOrder(orderId, productId) {
-  if (!confirm('Apagar este pedido? O produto voltará a ficar disponível.')) return;
+  if (!confirm('Apagar este pedido? A unidade voltará a ficar disponível.')) return;
   try {
     const { error } = await supabase.from('orders').delete().eq('id', orderId);
     if (error) throw new Error(error.message);
     if (productId) {
-      await supabase.from('products').update({ sold: false, sold_at: null }).eq('id', productId);
+      const { data: prod } = await supabase
+        .from('products').select('quantity,sold_count').eq('id', productId).single();
+      if (prod) {
+        const s        = stockOf(prod);
+        const newCount = Math.max(s.soldCount - 1, 0);
+        const stillOut = newCount >= s.quantity;
+        const upd = { sold_count: newCount, sold: stillOut };
+        if (!stillOut) upd.sold_at = null;
+        await supabase.from('products').update(upd).eq('id', productId);
+      }
     }
     await Promise.all([renderAdminOrders(), reloadAdminProducts()]);
   } catch(err) { alert('Erro: ' + err.message); }
@@ -1155,11 +1235,12 @@ async function exportCSV() {
 async function renderAdminProducts() {
   const list = document.getElementById('products-edit-list');
   if (!list) return;
-  list.innerHTML = '<p class="empty-state">Carregando...</p>';
+  if (!list.children.length) list.innerHTML = '<p class="empty-state">Carregando...</p>';
 
   const { data, error } = await supabase
     .from('products')
     .select('*, categories(id,name), product_images(id,url,sort_order)')
+    .order('sort_order', { ascending: true })
     .order('created_at');
 
   if (error) { list.innerHTML = `<p class="empty-state">Erro: ${escHtml(error.message)}</p>`; return; }
@@ -1168,14 +1249,22 @@ async function renderAdminProducts() {
   const { data: freshCats } = await supabase.from('categories').select('id,name').order('sort_order');
   const cats = freshCats || [];
 
-  list.innerHTML = data.map(p => {
-    const imgs       = (p.product_images || []).sort((a,b) => a.sort_order - b.sort_order);
+  const arrowBtn = 'background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:4px;width:24px;height:24px;cursor:pointer;font-size:11px;';
+  const imgBtn   = 'background:rgba(0,0,0,0.6);border:none;color:white;width:22px;height:22px;border-radius:4px;cursor:pointer;font-size:13px;line-height:1;';
+
+  list.innerHTML = data.map((p, pi) => {
+    const s          = stockOf(p);
+    const imgs       = sortImages(p.product_images);
     const catOptions = cats.map(c => `<option value="${c.id}" ${p.category_id===c.id?'selected':''}>${escHtml(c.name)}</option>`).join('');
     const thumb      = imgs.length > 0
       ? `<img src="${escHtml(imgs[0].url)}" style="width:44px;height:44px;object-fit:cover;border-radius:6px;border:1px solid var(--border);flex-shrink:0;">`
       : `<div style="width:44px;height:44px;border-radius:6px;border:1px solid var(--border);background:var(--bg3);flex-shrink:0;"></div>`;
-    const statusTag  = p.sold ? '<span class="tag tag-amber">Vendido</span>' : '<span class="tag tag-green">Disponível</span>';
-    const reativar   = p.sold ? `<button class="reset-btn" onclick="event.stopPropagation();reactivateProduct(${p.id})">Reativar</button>` : '';
+    const statusTag  = s.soldOut
+      ? `<span class="tag tag-amber">${s.quantity > 1 ? 'Esgotado' : 'Vendido'}</span>`
+      : `<span class="tag tag-green">Disponível${s.quantity > 1 ? ' · ' + s.remaining + '/' + s.quantity : ''}</span>`;
+    const reativar   = s.soldOut ? `<button class="reset-btn" onclick="event.stopPropagation();reactivateProduct(${p.id})">Reativar</button>` : '';
+    const upDis      = pi === 0 ? 'disabled style="' + arrowBtn + 'opacity:0.3;"' : 'style="' + arrowBtn + '"';
+    const dnDis      = pi === data.length - 1 ? 'disabled style="' + arrowBtn + 'opacity:0.3;"' : 'style="' + arrowBtn + '"';
 
     return `
       <div class="product-edit-card" id="pedit-${p.id}" style="padding:0;overflow:hidden;">
@@ -1183,14 +1272,20 @@ async function renderAdminProducts() {
              style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;
                     gap:0.5rem;padding:1rem 1.25rem;cursor:pointer;user-select:none;">
           <div style="display:flex;align-items:center;gap:0.75rem;">
+            <div style="display:flex;flex-direction:column;gap:4px;">
+              <button title="Subir anúncio"  onclick="event.stopPropagation();moveProduct(${p.id},-1)" ${upDis}>▲</button>
+              <button title="Descer anúncio" onclick="event.stopPropagation();moveProduct(${p.id},1)"  ${dnDis}>▼</button>
+            </div>
+            <span style="font-size:11px;color:var(--muted);min-width:22px;">#${pi + 1}</span>
             ${thumb}
             <div>
               <p style="font-family:Syne,sans-serif;font-weight:700;font-size:0.95rem;color:var(--white);">${escHtml(p.name)}</p>
-              <p style="font-size:11px;color:var(--muted);margin-top:1px;">R$ ${fmtM(p.price)} · ${escHtml(p.categories?.name || 'Sem categoria')}</p>
+              <p style="font-size:11px;color:var(--muted);margin-top:1px;">R$ ${fmtM(p.price)} · ${escHtml(p.categories?.name || 'Sem categoria')}${s.quantity > 1 ? ' · ' + s.soldCount + ' de ' + s.quantity + ' vendidas' : ''}</p>
             </div>
           </div>
           <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
             ${statusTag}${reativar}
+            <button class="export-btn" style="padding:0.35rem 0.8rem;font-size:11px;" onclick="event.stopPropagation();duplicateProduct(${p.id})">Duplicar</button>
             <button class="btn-danger" style="margin-left:0;" onclick="event.stopPropagation();deleteProduct(${p.id})">Remover</button>
             <span id="arrow-${p.id}" style="color:var(--muted);font-size:1.1rem;transition:transform 0.2s;">▼</span>
           </div>
@@ -1202,17 +1297,32 @@ async function renderAdminProducts() {
           <label>Categoria</label>
           <select id="pcat-${p.id}"><option value="">Sem categoria</option>${catOptions}</select>
           <label>Descrição / avarias</label>
-          <textarea rows="3" id="pdesc-${p.id}">${escHtml(p.description || '')}</textarea>
+          <textarea rows="6" id="pdesc-${p.id}" style="white-space:pre-wrap;">${escHtml(p.description || '')}</textarea>
+          <p style="font-size:11px;color:var(--muted);margin-top:4px;">As quebras de linha (Enter) são mantidas na página.</p>
           <label>Preço (R$)</label>
           <input type="number" value="${p.price}" id="pprice-${p.id}" min="0" step="0.01">
-          <label>Fotos atuais</label>
-          <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:8px;">
-            ${imgs.map(img =>
+          <label>Quantidade de unidades</label>
+          <input type="number" value="${s.quantity}" id="pqty-${p.id}" min="1" step="1">
+          <p style="font-size:11px;color:var(--muted);margin-top:4px;">
+            Vendidas: <strong style="color:var(--text);">${s.soldCount}</strong> · Restantes: <strong style="color:var(--text);">${s.remaining}</strong>.
+            O anúncio fica como esgotado quando todas as unidades forem vendidas.
+          </p>
+          <label>Fotos atuais ${imgs.length > 1 ? '<span style="font-weight:400;color:var(--muted);">(use ◀ ▶ para ordenar — a primeira é a capa)</span>' : ''}</label>
+          <div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:8px;">
+            ${imgs.map((img, ii) =>
               `<div style="position:relative;">
-                 <img src="${escHtml(img.url)}" style="width:80px;height:80px;object-fit:cover;border-radius:6px;border:1px solid var(--border);">
+                 <img src="${escHtml(img.url)}" style="width:80px;height:80px;object-fit:cover;border-radius:6px;border:${ii === 0 ? '2px solid var(--purple)' : '1px solid var(--border)'};">
+                 ${ii === 0 ? '<span style="position:absolute;top:4px;left:4px;background:var(--purple);color:white;font-size:9px;padding:1px 5px;border-radius:3px;letter-spacing:0.05em;">CAPA</span>' : ''}
                  <button onclick="deleteProductImage(${img.id},${p.id})"
                    style="position:absolute;top:-6px;right:-6px;width:20px;height:20px;border-radius:50%;
                           background:var(--danger);border:none;color:white;cursor:pointer;font-size:12px;">✕</button>
+                 ${imgs.length > 1 ? `
+                 <div style="position:absolute;bottom:4px;left:0;right:0;display:flex;justify-content:space-between;padding:0 4px;">
+                   <button title="Mover para a esquerda" onclick="moveProductImage(${p.id},${img.id},-1)" ${ii === 0 ? 'disabled' : ''}
+                     style="${imgBtn}${ii === 0 ? 'opacity:0.25;cursor:default;' : ''}">◀</button>
+                   <button title="Mover para a direita" onclick="moveProductImage(${p.id},${img.id},1)" ${ii === imgs.length - 1 ? 'disabled' : ''}
+                     style="${imgBtn}${ii === imgs.length - 1 ? 'opacity:0.25;cursor:default;' : ''}">▶</button>
+                 </div>` : ''}
                </div>`
             ).join('')}
           </div>
@@ -1226,26 +1336,46 @@ async function renderAdminProducts() {
         </div>
       </div>`;
   }).join('');
+
+  // Reabre os cards que estavam abertos antes de redesenhar
+  openProductCards.forEach(id => setProductCardOpen(id, true));
+}
+
+function setProductCardOpen(id, open) {
+  const body  = document.getElementById('body-'  + id);
+  const arrow = document.getElementById('arrow-' + id);
+  if (!body) { openProductCards.delete(id); return; }
+  body.style.display = open ? 'block' : 'none';
+  if (arrow) arrow.style.transform = open ? 'rotate(180deg)' : '';
+  if (open) openProductCards.add(id); else openProductCards.delete(id);
 }
 
 function toggleProductCard(id) {
-  const body  = document.getElementById('body-'  + id);
-  const arrow = document.getElementById('arrow-' + id);
+  const body = document.getElementById('body-' + id);
   if (!body) return;
-  const isOpen = body.style.display !== 'none';
-  body.style.display    = isOpen ? 'none' : 'block';
-  if (arrow) arrow.style.transform = isOpen ? '' : 'rotate(180deg)';
+  setProductCardOpen(id, body.style.display === 'none');
 }
 
 async function saveProduct(id) {
   const btn = document.querySelector(`#pedit-${id} .btn-save`);
   if (btn) { btn.disabled = true; btn.textContent = 'Salvando...'; }
   try {
+    const { data: cur, error: curErr } = await supabase
+      .from('products').select('sold_count,sold,sold_at').eq('id', id).single();
+    if (curErr) throw new Error(curErr.message);
+
+    const quantity  = Math.max(parseInt(document.getElementById(`pqty-${id}`).value) || 1, 1);
+    const soldCount = Math.max(parseInt(cur.sold_count) || 0, 0);
+    const soldOut   = soldCount >= quantity;
+
     const { error } = await supabase.from('products').update({
       name:        document.getElementById(`pname-${id}`).value.trim(),
       category_id: document.getElementById(`pcat-${id}`).value || null,
       description: document.getElementById(`pdesc-${id}`).value.trim(),
       price:       parseFloat(document.getElementById(`pprice-${id}`).value) || 0,
+      quantity,
+      sold:        soldOut,
+      sold_at:     soldOut ? (cur.sold_at || new Date().toISOString()) : null,
       updated_at:  new Date().toISOString()
     }).eq('id', id);
     if (error) throw new Error(error.message);
@@ -1264,6 +1394,7 @@ async function deleteProduct(id) {
   try {
     const { error } = await supabase.from('products').delete().eq('id', id);
     if (error) throw new Error(error.message);
+    openProductCards.delete(id);
     await reloadAdminProducts();
     await renderAdminProducts();
   } catch(err) { alert('Erro: ' + err.message); }
@@ -1271,24 +1402,105 @@ async function deleteProduct(id) {
 
 async function reactivateProduct(id) {
   try {
-    const { error } = await supabase.from('products').update({ sold: false, sold_at: null }).eq('id', id);
+    const { error } = await supabase.from('products')
+      .update({ sold: false, sold_at: null, sold_count: 0 }).eq('id', id);
     if (error) throw new Error(error.message);
     await reloadAdminProducts();
     await renderAdminProducts();
   } catch(err) { alert('Erro: ' + err.message); }
 }
 
+/* ── Ordem dos anúncios (item 13) ── */
+async function fetchProductOrder() {
+  const { data, error } = await supabase
+    .from('products').select('id,sort_order')
+    .order('sort_order', { ascending: true }).order('created_at');
+  if (error) throw new Error(error.message);
+  return data || [];
+}
+
+// Grava sort_order = posição na lista (só atualiza o que mudou)
+async function persistProductOrder(list) {
+  const results = await Promise.all(
+    list.map((p, i) => p.sort_order === i
+      ? null
+      : supabase.from('products').update({ sort_order: i }).eq('id', p.id))
+  );
+  const failed = results.find(r => r && r.error);
+  if (failed) throw new Error(failed.error.message);
+}
+
+async function moveProduct(id, dir) {
+  try {
+    const list = await fetchProductOrder();
+    const idx  = list.findIndex(p => p.id === id);
+    const t    = idx + dir;
+    if (idx === -1 || t < 0 || t >= list.length) return;
+    [list[idx], list[t]] = [list[t], list[idx]];
+    await persistProductOrder(list);
+    await renderAdminProducts();
+  } catch(err) { alert('Erro ao reordenar: ' + err.message); }
+}
+
+async function nextProductOrder() {
+  const { data } = await supabase.from('products').select('sort_order')
+    .order('sort_order', { ascending: false }).limit(1);
+  return data?.length ? (data[0].sort_order || 0) + 1 : 0;
+}
+
 async function addNewProduct() {
   try {
     const { data, error } = await supabase
-      .from('products').insert({ name: 'Novo produto', price: 100, description: '' })
+      .from('products')
+      .insert({ name: 'Novo produto', price: 100, description: '', quantity: 1, sold_count: 0, sort_order: await nextProductOrder() })
       .select().single();
     if (error) throw new Error(error.message);
+    openProductCards.add(data.id);
     await reloadAdminProducts();
     await renderAdminProducts();
-    const el = document.getElementById(`pedit-${data.id}`);
-    if (el) { el.scrollIntoView({ behavior: 'smooth' }); setTimeout(() => toggleProductCard(data.id), 300); }
+    document.getElementById(`pedit-${data.id}`)?.scrollIntoView({ behavior: 'smooth' });
   } catch(err) { alert('Erro: ' + err.message); }
+}
+
+/* ── Duplicar anúncio (item 14) ── */
+async function duplicateProduct(id) {
+  try {
+    const { data: src, error: srcErr } = await supabase
+      .from('products').select('*, product_images(url,sort_order)').eq('id', id).single();
+    if (srcErr) throw new Error(srcErr.message);
+
+    const { data: copy, error: insErr } = await supabase.from('products').insert({
+      name:        src.name + ' (cópia)',
+      category_id: src.category_id,
+      description: src.description || '',
+      price:       src.price,
+      quantity:    src.quantity || 1,
+      sold_count:  0,
+      sold:        false,
+      sort_order:  (src.sort_order || 0) + 1
+    }).select().single();
+    if (insErr) throw new Error(insErr.message);
+
+    // Copia as fotos (mesmas URLs do storage, na mesma ordem)
+    const srcImgs = sortImages(src.product_images);
+    if (srcImgs.length) {
+      const { error: imgErr } = await supabase.from('product_images').insert(
+        srcImgs.map((img, i) => ({ product_id: copy.id, url: img.url, sort_order: i }))
+      );
+      if (imgErr) throw new Error(imgErr.message);
+    }
+
+    // Posiciona a cópia logo abaixo do original
+    const list = (await fetchProductOrder()).filter(p => p.id !== copy.id);
+    const at   = list.findIndex(p => p.id === id);
+    list.splice(at + 1, 0, { id: copy.id, sort_order: -1 });
+    await persistProductOrder(list);
+
+    openProductCards.add(copy.id);
+    await reloadAdminProducts();
+    await renderAdminProducts();
+    document.getElementById(`pedit-${copy.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  } catch(err) { alert('Erro ao duplicar: ' + err.message); }
 }
 
 async function uploadProductImage(id) {
@@ -1308,6 +1520,30 @@ async function uploadProductImage(id) {
   await reloadAdminProducts();
   await renderAdminProducts();
   alert('Foto enviada!');
+}
+
+/* ── Ordem das fotos (item 11) ── */
+async function moveProductImage(productId, imgId, dir) {
+  try {
+    const { data, error } = await supabase.from('product_images')
+      .select('id,sort_order').eq('product_id', productId)
+      .order('sort_order', { ascending: true }).order('id');
+    if (error) throw new Error(error.message);
+    const list = data || [];
+    const idx  = list.findIndex(i => i.id === imgId);
+    const t    = idx + dir;
+    if (idx === -1 || t < 0 || t >= list.length) return;
+    [list[idx], list[t]] = [list[t], list[idx]];
+    const results = await Promise.all(
+      list.map((img, i) => img.sort_order === i
+        ? null
+        : supabase.from('product_images').update({ sort_order: i }).eq('id', img.id))
+    );
+    const failed = results.find(r => r && r.error);
+    if (failed) throw new Error(failed.error.message);
+    await reloadAdminProducts();
+    await renderAdminProducts();
+  } catch(err) { alert('Erro ao reordenar fotos: ' + err.message); }
 }
 
 async function deleteProductImage(imgId, productId) {
@@ -1522,6 +1758,9 @@ window.renameCategory      = renameCategory;
 window.deleteCategory      = deleteCategory;
 window.moveCat             = moveCat;
 window.toggleStore         = toggleStore;
+window.moveProduct         = moveProduct;
+window.duplicateProduct    = duplicateProduct;
+window.moveProductImage    = moveProductImage;
 window.clearOrders         = clearOrders;
 window.deleteOrder         = deleteOrder;
 window.exportCSV           = exportCSV;
